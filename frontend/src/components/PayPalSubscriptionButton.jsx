@@ -1,0 +1,162 @@
+import { useEffect, useRef, useState } from "react";
+
+let paypalSdkPromise;
+let paypalSdkClientId;
+
+function loadPayPalSdk(clientId) {
+  if (window.paypal && paypalSdkClientId === clientId) {
+    return Promise.resolve(window.paypal);
+  }
+
+  if (paypalSdkClientId !== clientId) {
+    delete window.paypal;
+    paypalSdkPromise = null;
+    paypalSdkClientId = clientId;
+
+    document
+      .querySelectorAll("script[data-paypal-sdk='subscription']")
+      .forEach((script) => script.remove());
+  }
+
+  if (!paypalSdkPromise) {
+    paypalSdkPromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = `https://www.paypal.com/sdk/js?client-id=${clientId}&vault=true&intent=subscription`;
+      script.async = true;
+      script.dataset.paypalSdk = "subscription";
+      script.onload = () => resolve(window.paypal);
+      script.onerror = () => reject(new Error("PayPal SDK failed to load"));
+      document.body.appendChild(script);
+    });
+  }
+
+  return paypalSdkPromise;
+}
+
+function getErrorMessage(error) {
+  if (!error) {
+    return "PayPal checkout failed. Please try again.";
+  }
+
+  const rawMessage =
+    typeof error === "string"
+      ? error
+      : error.message || "PayPal checkout failed. Please try again.";
+
+  if (
+    rawMessage.includes("RESOURCE_NOT_FOUND") ||
+    rawMessage.includes("INVALID_RESOURCE_ID")
+  ) {
+    return (
+      "PayPal plan not found. Use a Plan ID created in the same PayPal " +
+      "environment/account as this Client ID."
+    );
+  }
+
+  return rawMessage;
+}
+
+export default function PayPalSubscriptionButton({
+  createCheckoutContext,
+  onApproved,
+  planCode,
+  planId,
+  planName
+}) {
+  const containerRef = useRef(null);
+  const [message, setMessage] = useState("Loading PayPal checkout...");
+  const clientId = import.meta.env.VITE_PAYPAL_CLIENT_ID;
+
+  useEffect(() => {
+    if (!clientId || !planId || !containerRef.current) return;
+
+    let isMounted = true;
+    containerRef.current.innerHTML = "";
+
+    loadPayPalSdk(clientId)
+      .then((paypal) => {
+        if (!isMounted || !containerRef.current) return;
+
+        paypal
+          .Buttons({
+            style: {
+              color: "silver",
+              label: "subscribe",
+              layout: "vertical",
+              shape: "rect",
+              tagline: false
+            },
+            createSubscription: async (_data, actions) => {
+              const checkout = await createCheckoutContext(planCode);
+              return actions.subscription.create({
+                plan_id: checkout.plan_id,
+                custom_id: checkout.custom_id
+              });
+            },
+            onApprove: (data) => {
+              onApproved?.({
+                planCode,
+                subscriptionId: data.subscriptionID
+              });
+              setMessage(
+                `${planName} subscription started. ID: ${data.subscriptionID}`
+              );
+            },
+            onError: (error) => {
+              setMessage(getErrorMessage(error));
+            }
+          })
+          .render(containerRef.current)
+          .then(() => {
+            if (isMounted) {
+              setMessage("");
+            }
+          })
+          .catch((error) => {
+            setMessage(getErrorMessage(error));
+          });
+      })
+      .catch((error) => {
+        setMessage(getErrorMessage(error));
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [clientId, createCheckoutContext, onApproved, planCode, planId, planName]);
+
+  if (!clientId) {
+    return (
+      <p className="payment-note payment-note--error">
+        Online checkout is temporarily unavailable. Please contact support.
+      </p>
+    );
+  }
+
+  if (!planId) {
+    return (
+      <p className="payment-note payment-note--error">
+        {planName} online checkout is not available yet. Please contact support.
+      </p>
+    );
+  }
+
+  return (
+    <div className="paypal-button-wrap">
+      <div ref={containerRef} />
+      {message && (
+        <p
+          className={`payment-note ${
+            message.toLowerCase().includes("fail") ||
+            message.toLowerCase().includes("error") ||
+            message.toLowerCase().includes("unable")
+              ? "payment-note--error"
+              : ""
+          }`}
+        >
+          {message}
+        </p>
+      )}
+    </div>
+  );
+}

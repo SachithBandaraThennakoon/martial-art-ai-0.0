@@ -1,0 +1,52 @@
+uvicorn main:app --reload
+pip install psycopg2-binary
+pip install python-jose passlib[bcrypt]
+
+pip uninstall bcrypt passlib -y
+pip install bcrypt==4.0.1
+pip install passlib[bcrypt]
+
+pip freeze > requirements.txt
+pip install -r requirements.txt
+
+uvicorn main:app --reload
+python -m venv venv
+venv\Scripts\activate
+
+pip install python-multipart
+npm install @mediapipe/tasks-vision
+
+pip install python-multipart
+///////////////////////////////////////////////
+
+Ctrl + Shift + P → Reload Window
+
+npm install @mediapipe/pose @mediapipe/drawing_utils @mediapipe/camera_utils
+
+Remove-Item -Path "C:\Users\DELL\OneDrive - Vantage Ltd\Documents\New project\martial-art-ai\.git\index.lock" -Force
+
+
+/admin-temporal-data
+
+
+Main meanings:
+IDLE: visible but not performing or preparing.
+PREPARATION: getting ready before the first technique state.
+REP_START / REP_END: short repetition boundaries.
+STEP_HOLD: intentionally holding a pose.
+REP_RECOVERY: returning to the starting stance.
+INCOMPLETE_REP: repetition started but never completed.
+INCORRECT_MOVEMENT: movement does not match the selected technique.
+__TRACKING_LOST__: landmarks are missing or unreliable.
+__UNKNOWN__: the correct state cannot be confidently determined.
+GUARD_TO_EXTENSION: movement leaving Guard and entering Extension.
+Other transition labels receive equivalent automatic explanations.
+
+
+
+Saved and updated inside the project:
+[Current handoff](CHAT_HANDOFF.md)
+[Portable transcript](CHAT_TRANSCRIPT.md)
+[Extended chat record](chat.md)
+On your personal laptop, let OneDrive finish syncing, then tell Codex:
+Read other/private-notes/CHAT_HANDOFF.md and other/private-notes/CHAT_TRANSCRIPT.md. Use “Current transfer update — 2026-07-31” as the authoritative status. Continue with the end-to-end pilot and framework-evaluation protocol. Do not generate the thesis yet.
