@@ -1771,8 +1771,13 @@ export default function PracticeMode({
   useEffect(() => {
     const controller = new AbortController();
     setPracticeAnalysis(null);
-    loadPracticeAnalysis(controller.signal);
-    return () => controller.abort();
+    const timer = window.setTimeout(() => {
+      loadPracticeAnalysis(controller.signal);
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
   }, [loadPracticeAnalysis]);
 
   const fetchPracticeVoice = useCallback(async (message) => {
@@ -2941,10 +2946,29 @@ export default function PracticeMode({
         window.clearTimeout(attentionReminderTimerRef.current);
       }
       clearCountBeatTimers();
-      stopVoiceInput();
-      stopPracticeVoice();
+      shouldListenRef.current = false;
+      voiceRequestIdRef.current += 1;
+      voiceQueueRef.current = [];
+      isSpeakingRef.current = false;
+      if (restartListenTimerRef.current) {
+        window.clearTimeout(restartListenTimerRef.current);
+        restartListenTimerRef.current = null;
+      }
+      if (recognitionRef.current) {
+        recognitionRef.current.onend = null;
+        recognitionRef.current.onerror = null;
+        recognitionRef.current.onresult = null;
+        recognitionRef.current.stop();
+        recognitionRef.current = null;
+      }
+      if (currentAudioRef.current) {
+        const audio = currentAudioRef.current;
+        currentAudioRef.current = null;
+        audio.pause();
+        audio.src = "";
+      }
     };
-  }, [clearCountBeatTimers, stopPracticeVoice, stopVoiceInput]);
+  }, [clearCountBeatTimers]);
 
   const openHistorySession = useCallback(async (historySession) => {
     if (

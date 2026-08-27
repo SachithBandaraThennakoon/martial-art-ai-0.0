@@ -16,6 +16,19 @@ Run migrations as a single release/deployment step before starting or scaling
 the API. `RUN_DB_MIGRATIONS=true` can be used for a single-instance development
 deployment, but should remain `false` for horizontally scaled production.
 
+If a local development database references a migration that is no longer in
+the repository, preserve it and create a migrated sibling database:
+
+```powershell
+python -m scripts.create_clean_dev_database
+python -m scripts.create_clean_dev_database --confirm
+python -m scripts.create_clean_dev_database --confirm --activate
+```
+
+The first command is a dry run. Creation is restricted to PostgreSQL on
+localhost. The old database is never dropped, and `--activate` backs up `.env`
+before changing `DATABASE_URL`.
+
 After the schema is current, synchronize reviewed technique packages once with:
 
 ```powershell

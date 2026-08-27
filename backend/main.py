@@ -292,6 +292,8 @@ def _readiness_response():
         "checks": {
             "database": readiness["database"],
             "migrations": readiness["migrations"],
+            "current_revisions": readiness.get("current_revisions", []),
+            "expected_revisions": readiness.get("expected_revisions", []),
         },
         "latency_ms": readiness["latency_ms"],
     }

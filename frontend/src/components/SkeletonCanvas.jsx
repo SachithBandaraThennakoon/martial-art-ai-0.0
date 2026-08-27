@@ -1171,49 +1171,58 @@ export default function SkeletonCanvas({
       return undefined;
     }
 
-    const token = getAccessToken();
-    const socket = new WebSocket(`${WS_BASE_URL}/ws/train`);
     let disposed = false;
-    wsRef.current = socket;
+    let socket = null;
+    const timer = window.setTimeout(() => {
+      if (disposed) return;
+      const token = getAccessToken();
+      socket = new WebSocket(`${WS_BASE_URL}/ws/train`);
+      wsRef.current = socket;
 
-    socket.onopen = () => {
-      if (disposed) {
-        socket.close();
-        return;
-      }
+      socket.onopen = () => {
+        if (disposed) {
+          socket.close();
+          return;
+        }
 
-      socket.send(JSON.stringify({ type: "authenticate", token }));
-      socket.send(
-        JSON.stringify({
-          type: "session_config",
-          ...sessionConfigRef.current,
-          step_key: currentStepIdRef.current,
-          step_name: currentStepNameRef.current
-        })
-      );
+        socket.send(JSON.stringify({ type: "authenticate", token }));
+        socket.send(
+          JSON.stringify({
+            type: "session_config",
+            ...sessionConfigRef.current,
+            step_key: currentStepIdRef.current,
+            step_name: currentStepNameRef.current
+          })
+        );
 
-      if (pendingCommandRef.current) {
-        sendCoachCommand(pendingCommandRef.current);
-      }
-    };
+        if (pendingCommandRef.current) {
+          sendCoachCommand(pendingCommandRef.current);
+        }
+      };
 
-    socket.onmessage = (event) => {
-      const data = JSON.parse(event.data);
+      socket.onmessage = (event) => {
+        const data = JSON.parse(event.data);
 
-      onAccuracyUpdateRef.current?.(data.accuracy);
-      onFeedbackUpdateRef.current?.(data.feedback?.join("\n") || data.message || "");
+        onAccuracyUpdateRef.current?.(data.accuracy);
+        onFeedbackUpdateRef.current?.(data.feedback?.join("\n") || data.message || "");
 
-      if (data.summary) {
-        onSummaryUpdateRef.current?.(data.summary);
-      }
+        if (data.summary) {
+          onSummaryUpdateRef.current?.(data.summary);
+        }
 
-      onCoachEventRef.current?.(data);
-    };
+        onCoachEventRef.current?.(data);
+      };
+    }, 0);
 
     return () => {
       disposed = true;
+      window.clearTimeout(timer);
+      if (!socket) return;
       socket.onmessage = null;
-      if (socket.readyState === WebSocket.OPEN) {
+      if (
+        socket.readyState === WebSocket.OPEN ||
+        socket.readyState === WebSocket.CONNECTING
+      ) {
         socket.close();
       }
       if (wsRef.current === socket) {
@@ -1229,6 +1238,9 @@ export default function SkeletonCanvas({
     let animationFrameId;
     let cameraStream;
     let isDisposed = false;
+    let ownedPose = null;
+    let ownedHand = null;
+    let ownedFace = null;
     let processingSamples = [];
     let lastPerformanceTuneTime = 0;
     const videoElement = videoRef.current;
@@ -1287,8 +1299,9 @@ export default function SkeletonCanvas({
         return;
       }
 
-      handModelPromiseRef.current = HandLandmarker.createFromOptions(
-        visionRef.current,
+      const activeVision = visionRef.current;
+      const promise = HandLandmarker.createFromOptions(
+        activeVision,
         {
           baseOptions: {
             modelAssetPath:
@@ -1299,11 +1312,19 @@ export default function SkeletonCanvas({
         }
       )
         .then((landmarker) => {
+          if (isDisposed || visionRef.current !== activeVision) {
+            landmarker.close?.();
+            return;
+          }
+          ownedHand = landmarker;
           handRef.current = landmarker;
         })
         .finally(() => {
-          handModelPromiseRef.current = null;
+          if (handModelPromiseRef.current === promise) {
+            handModelPromiseRef.current = null;
+          }
         });
+      handModelPromiseRef.current = promise;
     };
 
     const ensureFaceLandmarker = async () => {
@@ -1311,8 +1332,9 @@ export default function SkeletonCanvas({
         return;
       }
 
-      faceModelPromiseRef.current = FaceLandmarker.createFromOptions(
-        visionRef.current,
+      const activeVision = visionRef.current;
+      const promise = FaceLandmarker.createFromOptions(
+        activeVision,
         {
           baseOptions: {
             modelAssetPath:
@@ -1323,11 +1345,19 @@ export default function SkeletonCanvas({
         }
       )
         .then((landmarker) => {
+          if (isDisposed || visionRef.current !== activeVision) {
+            landmarker.close?.();
+            return;
+          }
+          ownedFace = landmarker;
           faceRef.current = landmarker;
         })
         .finally(() => {
-          faceModelPromiseRef.current = null;
+          if (faceModelPromiseRef.current === promise) {
+            faceModelPromiseRef.current = null;
+          }
         });
+      faceModelPromiseRef.current = promise;
     };
 
     const sendCoachFrame = (anglesPayload) => {
@@ -2096,9 +2126,10 @@ export default function SkeletonCanvas({
       const vision = await FilesetResolver.forVisionTasks(
         "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.32/wasm"
       );
+      if (isDisposed) return;
       visionRef.current = vision;
 
-      poseRef.current = await PoseLandmarker.createFromOptions(vision, {
+      const pose = await PoseLandmarker.createFromOptions(vision, {
         baseOptions: {
           modelAssetPath:
             "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task"
@@ -2106,6 +2137,12 @@ export default function SkeletonCanvas({
         runningMode: "VIDEO",
         numPoses: 1
       });
+      if (isDisposed || visionRef.current !== vision) {
+        pose.close?.();
+        return;
+      }
+      ownedPose = pose;
+      poseRef.current = pose;
 
       try {
         if (inputSource === "video") {
@@ -2136,13 +2173,18 @@ export default function SkeletonCanvas({
         videoElement.removeAttribute("src");
         videoElement.load();
       }
-      poseRef.current?.close?.();
-      handRef.current?.close?.();
-      faceRef.current?.close?.();
-      poseRef.current = null;
-      handRef.current = null;
-      faceRef.current = null;
-      visionRef.current = null;
+      ownedPose?.close?.();
+      ownedHand?.close?.();
+      ownedFace?.close?.();
+      if (poseRef.current === ownedPose) poseRef.current = null;
+      if (handRef.current === ownedHand) handRef.current = null;
+      if (faceRef.current === ownedFace) faceRef.current = null;
+      if (
+        visionRef.current &&
+        (!poseRef.current || poseRef.current === ownedPose)
+      ) {
+        visionRef.current = null;
+      }
     };
   }, [inputSource, inputVideoName, inputVideoUrl, onInputStatus]);
 

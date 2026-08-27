@@ -55,20 +55,29 @@ export default function useBodyCalibration() {
   }, []);
 
   useEffect(() => {
-    const token = getAccessToken();
-    if (!token) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      const token = getAccessToken();
+      if (!token) return;
 
-    authFetch(`${API_BASE_URL}/profile/body-calibration`, {
-      headers: { Authorization: `Bearer ${token}` }
-    })
-      .then((response) => (response.ok ? response.json() : null))
-      .then((payload) => {
-        if (payload?.calibration) {
-          setProfile(payload.calibration);
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(payload.calibration));
-        }
+      authFetch(`${API_BASE_URL}/profile/body-calibration`, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal
       })
-      .catch(() => {});
+        .then((response) => (response.ok ? response.json() : null))
+        .then((payload) => {
+          if (payload?.calibration && !controller.signal.aborted) {
+            setProfile(payload.calibration);
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(payload.calibration));
+          }
+        })
+        .catch(() => {});
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
   }, []);
 
   const startCalibration = useCallback(() => {

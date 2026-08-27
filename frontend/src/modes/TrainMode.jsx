@@ -995,13 +995,35 @@ export default function TrainMode({
     startVoiceInput(false);
   }, [handsFreeEnabled, startVoiceInput, stopVoiceInput, voiceState]);
 
-  useEffect(
-    () => () => {
-      stopVoiceInput();
-      stopCurrentVoice();
-    },
-    [stopCurrentVoice, stopVoiceInput]
-  );
+  useEffect(() => () => {
+    shouldListenRef.current = false;
+    listeningRef.current = false;
+    voiceRequestIdRef.current += 1;
+    voiceQueueRef.current = [];
+    isSpeakingRef.current = false;
+
+    if (restartListenTimerRef.current) {
+      window.clearTimeout(restartListenTimerRef.current);
+      restartListenTimerRef.current = null;
+    }
+    if (wordTimerRef.current) {
+      window.clearInterval(wordTimerRef.current);
+      wordTimerRef.current = null;
+    }
+    if (recognitionRef.current) {
+      recognitionRef.current.onend = null;
+      recognitionRef.current.onerror = null;
+      recognitionRef.current.onresult = null;
+      recognitionRef.current.stop();
+      recognitionRef.current = null;
+    }
+    if (currentAudioRef.current) {
+      const audio = currentAudioRef.current;
+      currentAudioRef.current = null;
+      audio.pause();
+      audio.src = "";
+    }
+  }, []);
 
   useEffect(() => {
     if (steps.length > 0 && currentStepIndex >= steps.length) {

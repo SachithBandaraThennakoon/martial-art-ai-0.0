@@ -3,12 +3,15 @@ import {
   logitsToStateProbabilities,
   validateUniversalTemporalMetadata
 } from "./temporalModelContract.js";
+import { configureWasmRuntime } from "./onnxRuntimeAssets.js";
 
 const MODEL_PATH = "/models/universal-temporal/martial_arts_temporal.onnx";
 const METADATA_PATH =
   "/models/universal-temporal/martial_arts_temporal.metadata.json";
 const MINIMUM_FRAMES = 12;
 const INFERENCE_INTERVAL_MS = 70;
+
+configureWasmRuntime(ort);
 
 function distance(first, second) {
   return Math.hypot(

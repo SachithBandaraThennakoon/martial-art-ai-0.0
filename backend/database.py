@@ -46,12 +46,16 @@ def database_readiness() -> dict:
                 "ready": False,
                 "database": "reachable",
                 "migrations": "mismatch",
+                "current_revisions": sorted(current_heads),
+                "expected_revisions": sorted(expected_heads),
                 "latency_ms": round((time.perf_counter() - started) * 1000, 2),
             }
         return {
             "ready": True,
             "database": "reachable",
             "migrations": "current",
+            "current_revisions": sorted(current_heads),
+            "expected_revisions": sorted(expected_heads),
             "latency_ms": round((time.perf_counter() - started) * 1000, 2),
         }
     except SQLAlchemyError:
@@ -59,6 +63,8 @@ def database_readiness() -> dict:
             "ready": False,
             "database": "unavailable",
             "migrations": "unknown",
+            "current_revisions": [],
+            "expected_revisions": [],
             "latency_ms": round((time.perf_counter() - started) * 1000, 2),
         }
     except (CommandError, OSError, RuntimeError, ValueError):
@@ -66,6 +72,8 @@ def database_readiness() -> dict:
             "ready": False,
             "database": "unknown",
             "migrations": "unavailable",
+            "current_revisions": [],
+            "expected_revisions": [],
             "latency_ms": round((time.perf_counter() - started) * 1000, 2),
         }
 
@@ -74,7 +82,10 @@ def check_database_ready():
     status = database_readiness()
     if not status["ready"]:
         logger.error(
-            "Database readiness failed",
+            "Database readiness failed: database=%s migrations=%s latency_ms=%s",
+            status["database"],
+            status["migrations"],
+            status["latency_ms"],
             extra={"event": "database_not_ready", "component": "database", "outcome": status["migrations"]},
         )
     return bool(status["ready"])

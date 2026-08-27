@@ -166,7 +166,7 @@
             "min": 140,
             "max": 180,
             "role": "supporting",
-            "weight": 1.25
+            "weight": 0.5
           },
           {
             "body_part": "wrist_right",
@@ -175,7 +175,7 @@
             "min": 140,
             "max": 180,
             "role": "supporting",
-            "weight": 1.25
+            "weight": 0.5
           }
         ],
         "quality_targets": [
@@ -186,7 +186,7 @@
             "target": 90,
             "min": 70,
             "max": 100,
-            "weight": 1.5,
+            "weight": 0.5,
             "group": "guard"
           },
           {
@@ -196,7 +196,7 @@
             "target": 90,
             "min": 70,
             "max": 100,
-            "weight": 1.5,
+            "weight": 0.5,
             "group": "guard"
           },
           {
@@ -628,7 +628,7 @@
             "target": 92,
             "min": 75,
             "max": 100,
-            "weight": 2,
+            "weight": 1,
             "group": "guard"
           },
           {
@@ -638,7 +638,7 @@
             "target": 90,
             "min": 70,
             "max": 100,
-            "weight": 1.5,
+            "weight": 1,
             "group": "guard"
           },
           {
@@ -1077,7 +1077,7 @@
             "target": 60,
             "min": 50,
             "max": 100,
-            "weight": 1.5,
+            "weight": 1,
             "group": "guard"
           },
           {
@@ -1087,7 +1087,7 @@
             "target": 60,
             "min": 50,
             "max": 100,
-            "weight": 1.5,
+            "weight": 1,
             "group": "guard"
           },
           {
