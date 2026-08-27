@@ -2,16 +2,16 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { NavLink, useNavigate, useParams, useSearchParams } from "react-router";
 import SessionAnalysisPanel from "../components/SessionAnalysisPanel";
 import StoredSessionTapePanel from "../components/StoredSessionTapePanel";
-import { techniqueCatalog } from "../data/techniqueCatalog";
+import { useCatalog } from "../context/CatalogContext";
 import { API_BASE_URL } from "../services/api";
 import { authFetch, getAccessToken } from "../services/authSession";
 
 const PAGES = [
-  { id: "overview", code: "01", label: "Overview", description: "Health and next action" },
-  { id: "performance", code: "02", label: "Performance", description: "Quality, pace and issues" },
+  { id: "overview", code: "01", label: "Overview", description: "Progress and next action" },
+  { id: "performance", code: "02", label: "Performance", description: "Form, pace, and focus areas" },
   { id: "techniques", code: "03", label: "Techniques", description: "Compare skills" },
   { id: "activity", code: "04", label: "Activity", description: "Frequency and habits" },
-  { id: "sessions", code: "05", label: "Sessions", description: "Explore every set" }
+  { id: "sessions", code: "05", label: "Sessions", description: "Review every set" }
 ];
 
 const isoDate = (date) => date.toISOString().slice(0, 10);
@@ -120,11 +120,12 @@ function Panel({ eyebrow, title, meta, className = "", children }) {
 }
 
 function DashboardFilters({ searchParams, setSearchParams, data, collapsed, onToggle }) {
+  const { catalog } = useCatalog();
   const category = searchParams.get("category") || "";
   const subcategory = searchParams.get("subcategory") || "";
   const taxonomy = useMemo(() => Object.fromEntries(
-    techniqueCatalog.map((item) => [item.category, Object.fromEntries(item.subcategories.map((sub) => [sub.name, sub.techniques.map((technique) => technique.name)]))])
-  ), []);
+    catalog.map((item) => [item.category, Object.fromEntries(item.subcategories.map((sub) => [sub.name, sub.techniques.map((technique) => technique.name)]))])
+  ), [catalog]);
   const subcategories = category ? Object.keys(taxonomy[category] || {}) : [];
   const techniques = subcategory ? taxonomy[category]?.[subcategory] || [] : [];
   const update = (key, value, clear = []) => {
@@ -161,7 +162,7 @@ function DashboardFilters({ searchParams, setSearchParams, data, collapsed, onTo
         <label><span>Subcategory</span><select disabled={!category} value={subcategory} onChange={(event) => update("subcategory", event.target.value, ["technique_name"])}><option value="">All subcategories</option>{subcategories.map((item) => <option key={item}>{item}</option>)}</select></label>
         <label><span>Technique</span><select disabled={!subcategory} value={searchParams.get("technique_name") || ""} onChange={(event) => update("technique_name", event.target.value)}><option value="">All techniques</option>{techniques.map((item) => <option key={item}>{item}</option>)}</select></label>
         <label><span>Difficulty</span><select value={searchParams.get("difficulty") || ""} onChange={(event) => update("difficulty", event.target.value)}><option value="">All levels</option><option>Beginner</option><option>Intermediate</option><option>Advanced</option></select></label>
-        <label><span>Status</span><select value={searchParams.get("status") || "all"} onChange={(event) => update("status", event.target.value)}><option value="all">All statuses</option><option value="completed">Completed</option><option value="active">Active / incomplete</option><option value="cancelled">Cancelled</option></select></label>
+        <label><span>Status</span><select value={searchParams.get("status") || "all"} onChange={(event) => update("status", event.target.value)}><option value="all">All statuses</option><option value="completed">Completed</option><option value="active">Active / incomplete</option><option value="cancelled">Canceled</option></select></label>
         <label><span>Minimum accuracy</span><select value={searchParams.get("accuracy_min") || ""} onChange={(event) => update("accuracy_min", event.target.value)}><option value="">Any score</option>{[50, 60, 70, 80, 90].map((item) => <option key={item} value={item}>{item}%+</option>)}</select></label>
         <label><span>Focus area</span><select value={searchParams.get("focus") || ""} onChange={(event) => update("focus", event.target.value)}><option value="">All focus areas</option>{(data?.filter_options?.focus_areas || []).map((item) => <option key={item} value={item}>{formatLabel(item)}</option>)}</select></label>
         <button className="dashboard-filters__clear" onClick={() => setSearchParams({}, { replace: true })} type="button">Clear all filters</button>
@@ -181,7 +182,7 @@ function OverviewPage({ data }) {
       <KpiCard label="Tracking quality" value={overview.tracking_quality == null ? "--" : `${overview.tracking_quality}%`} detail="Practice landmark visibility" />
       <KpiCard label="Response time" value={overview.average_response_time_ms == null ? "--" : `${overview.average_response_time_ms}ms`} detail={`${overview.aborted_reps} incomplete reps`} />
       <KpiCard label="Training time" value={`${overview.training_minutes}m`} detail={`${overview.active_days} active days`} />
-      <KpiCard label="Top technique" value={overview.top_technique || "--"} detail="Highest average form" />
+      <KpiCard label="Top technique" value={overview.top_technique || "--"} detail="Highest average form score" />
     </div>
     <Panel eyebrow="Form trajectory" title="Accuracy over time" meta={`${data.daily.length} active days`} className="dashboard-card--wide"><LineChart data={data.daily} /></Panel>
     <Panel eyebrow="Technique ranking" title="Strongest skills" meta="Average form"><BarList items={data.techniques.slice(0, 6)} valueKey="average_accuracy" suffix="%" /></Panel>
@@ -196,7 +197,7 @@ function PerformancePage({ data }) {
       <KpiCard label="Average form" value={`${data.overview.average_accuracy}%`} detail="Selected period" tone="blue" />
       <KpiCard label="Clean rate" value={`${data.overview.clean_rate}%`} detail="Practice repetitions" tone="green" />
       <KpiCard label="Consistency" value={`${data.overview.consistency}%`} detail="Stable execution" />
-      <KpiCard label="Best score" value={`${data.overview.best_accuracy}%`} detail="Personal high" />
+      <KpiCard label="Best score" value={`${data.overview.best_accuracy}%`} detail="Personal best" />
       <KpiCard label="Tracking quality" value={data.overview.tracking_quality == null ? "--" : `${data.overview.tracking_quality}%`} detail="Analyzed Practice tapes" />
       <KpiCard label="Response time" value={data.overview.average_response_time_ms == null ? "--" : `${data.overview.average_response_time_ms}ms`} detail={`${data.overview.aborted_reps} incomplete reps`} />
     </div>

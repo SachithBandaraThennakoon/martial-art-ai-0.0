@@ -1,7 +1,6 @@
 import unittest
 
 from services.technique_package_loader import (
-    TECHNIQUE_ROOT,
     load_technique_catalog,
     load_technique_packages,
 )
@@ -41,8 +40,7 @@ class TechniqueDatasetTests(unittest.TestCase):
         self.assertGreaterEqual(len(self.packages), 33)
         for package in self.packages:
             with self.subTest(technique=package["catalog"]["name"]):
-                self.assertTrue((package["directory"] / "catalog.json").is_file())
-                self.assertTrue((package["directory"] / "training-steps.json").is_file())
+                self.assertTrue(package["source_file"].is_file())
 
     def test_technique_names_are_unique(self):
         names = [technique["name"] for technique in self.techniques]
@@ -52,10 +50,10 @@ class TechniqueDatasetTests(unittest.TestCase):
         ids = [technique["id"] for technique in self.techniques]
         self.assertEqual(len(ids), len(set(ids)))
         for package in self.packages:
-            self.assertEqual(
-                package["catalog"]["id"],
-                package["directory"].name,
-            )
+                self.assertEqual(
+                    package["catalog"]["id"],
+                    package["training_steps"]["technique_id"],
+                )
 
     def test_temporal_packages_are_complete(self):
         tracked = {
@@ -65,12 +63,15 @@ class TechniqueDatasetTests(unittest.TestCase):
         }
         self.assertEqual(tracked, {"jab", "front-kick"})
 
-    def test_every_technique_has_one_to_three_ordered_steps(self):
+    def test_every_technique_has_one_to_twelve_ordered_steps(self):
         for technique in self.techniques:
             with self.subTest(technique=technique["name"]):
                 steps = technique["steps"]
                 self.assertGreaterEqual(len(steps), 1)
-                self.assertLessEqual(len(steps), 3)
+                # The training UI navigates steps by their ordered position and
+                # supports complete action cycles such as the five-phase front
+                # kick (guard, chamber, extension, recoil, recovery).
+                self.assertLessEqual(len(steps), 12)
                 self.assertEqual(
                     [step["step_number"] for step in steps],
                     list(range(1, len(steps) + 1)),

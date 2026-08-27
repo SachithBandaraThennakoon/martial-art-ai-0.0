@@ -32,7 +32,7 @@ export default function ForgotPassword() {
       });
       setDevelopmentUrl(data.development_reset_url || "");
     } catch (error) {
-      setStatus({ type: "error", message: error.message || "The service is temporarily unavailable." });
+      setStatus({ type: "error", message: error.message || "Password reset is temporarily unavailable. Please try again." });
     }
   };
 
@@ -73,7 +73,7 @@ export default function ForgotPassword() {
           {status.type === "loading" ? "Sending…" : "Send reset link"}
         </button>
 
-        <p className="auth-card__footer">Remembered it? <Link to="/login">Return to sign in</Link></p>
+        <p className="auth-card__footer">Remember your password? <Link to="/login">Return to sign in</Link></p>
       </form>
     </main>
   );

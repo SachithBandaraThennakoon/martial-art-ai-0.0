@@ -222,29 +222,17 @@ export default function TrainMode({
     [angles, currentStep, displayAngleParts, formDifficulty, ruleEngineFrame]
   );
   const feedbackAngleParts = useMemo(() => {
-    const profile = currentStep?.difficulty_profiles?.[formDifficulty];
-    const toleranceScale = profile?.tolerance_scale ?? 1;
-    const scaleTarget = (target, ideal) => ({
-      ...target,
-      min: ideal - (ideal - target.min) * toleranceScale,
-      max: ideal + (target.max - ideal) * toleranceScale
-    });
     const angleParts = displayAngleParts.map((target) => {
-      const ideal =
-        target.target_angle ?? Math.round((target.min + target.max) / 2);
-      return scaleTarget(target, ideal);
+      return { ...target };
     });
     const qualityParts = (currentStep?.quality_targets || []).map((target) =>
-      scaleTarget(
-        {
-          ...target,
-          body_part: target.body_part || target.feature
-        },
-        target.target ?? Math.round((target.min + target.max) / 2)
-      )
+      ({
+        ...target,
+        body_part: target.body_part || target.feature
+      })
     );
     return [...angleParts, ...qualityParts];
-  }, [currentStep, displayAngleParts, formDifficulty]);
+  }, [currentStep, displayAngleParts]);
   const selectFormDifficulty = useCallback((difficulty) => {
     if (!FORM_DIFFICULTIES.includes(difficulty)) return;
     setFormDifficulty(difficulty);

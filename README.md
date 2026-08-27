@@ -1,5 +1,18 @@
 # Martial Art AI
 
+Production-focused development workspace for the Martial Art AI application.
+
+## Project layout
+
+- `frontend/` — React/Vite client, browser pose processing, model assets, and frontend tests.
+- `backend/` — FastAPI API, PostgreSQL models/migrations, background jobs, and backend tests.
+- `azure/` — deployment handoff, production checklist, incident response, recovery, and storage policy.
+- `research/` — retained research methods, thesis material, reproducibility evidence, and experiment tools.
+- `training/` — retained model-training source, schemas, samples, and notebooks.
+- `other/` — internal project material; do not copy it into a public evidence package.
+
+Runtime code and deployment documentation are intentionally kept separate from research and training assets.
+
 ## Development
 
 Start the backend from PowerShell:
@@ -36,3 +49,8 @@ Production deployment is intentionally deferred until development and billing
 configuration are complete. The Azure architecture, environment settings,
 release checks, container file, App Service startup script, and Static Web Apps
 configuration are documented in [azure/README.md](azure/README.md).
+
+Before opening a production release, use the [production release checklist](azure/PRODUCTION_RELEASE_CHECKLIST.md),
+run the frontend and backend release gates in GitHub Actions, and complete the
+database migration, billing, monitoring, backup/restore, and device-validation
+steps documented in the Azure handoff.

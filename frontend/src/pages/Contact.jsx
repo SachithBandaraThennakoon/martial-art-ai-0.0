@@ -30,7 +30,7 @@ export default function Contact() {
       setForm(initialForm);
       setStatus({ type: "success", message: data.message || "Message received. We’ll get back to you soon." });
     } catch (error) {
-      setStatus({ type: "error", message: error.message || "Contact is unavailable right now. Please try again." });
+      setStatus({ type: "error", message: error.message || "We can’t send your message right now. Please try again." });
     }
   };
 
@@ -40,7 +40,7 @@ export default function Contact() {
         <div>
           <p className="eyebrow">XMartialArt support · By Xceed</p>
           <h1>Let’s improve your training experience.</h1>
-          <p>Questions about coaching, memberships, studio access, or partnerships? Send the right context and our team can help faster.</p>
+          <p>Questions about coaching, memberships, Studio access, or partnerships? Share a few details so our team can help you faster.</p>
         </div>
         <div className="contact-hero__promise">
           <span>Typical response</span>
@@ -68,7 +68,7 @@ export default function Contact() {
               <option>Privacy and safety</option>
             </select>
           </label>
-          <label>Message<textarea maxLength="2000" minLength="20" name="message" onChange={updateField} placeholder="Tell us what you were trying to do and what happened…" required rows="7" value={form.message} /></label>
+          <label className="contact-form__message">Message<textarea maxLength="2000" minLength="20" name="message" onChange={updateField} placeholder="Tell us what you were trying to do and what happened…" required rows="5" value={form.message} /></label>
           <input aria-hidden="true" autoComplete="off" className="contact-form__honeypot" name="company" onChange={updateField} tabIndex="-1" type="text" value={form.company} />
           <button className="btn btn--light" disabled={status.type === "loading"} type="submit">
             {status.type === "loading" ? "Sending…" : "Send message"}

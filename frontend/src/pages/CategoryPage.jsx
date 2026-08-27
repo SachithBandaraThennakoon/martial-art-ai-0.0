@@ -1,7 +1,8 @@
 import { useContext, useMemo, useState } from "react";
 import { Link, Navigate, useLocation, useParams } from "react-router";
 import { AuthContext } from "../context/auth";
-import { getCategoryBySlug, slugify } from "../data/techniqueCatalog";
+import { slugify } from "../data/techniqueCatalog";
+import { useCatalog } from "../context/CatalogContext";
 import { canAccessPlan, formatPlanName } from "../data/planAccess";
 
 function formatPrice(price) {
@@ -11,10 +12,12 @@ function formatPrice(price) {
 export default function CategoryPage() {
   const { categorySlug } = useParams();
   const location = useLocation();
-  const category = getCategoryBySlug(categorySlug);
+  const { catalog, status: catalogStatus } = useCatalog();
+  const category = catalog.find((item) => slugify(item.category) === categorySlug);
   const { userPlan = "FREE_PLAN" } = useContext(AuthContext) || {};
   const isAdminStudio = new URLSearchParams(location.search).get("admin") === "1";
   const [query, setQuery] = useState("");
+  const [selectedSubcategory, setSelectedSubcategory] = useState("");
   const normalizedQuery = query.trim().toLowerCase();
 
   const visibleSubcategories = useMemo(() => {
@@ -32,6 +35,12 @@ export default function CategoryPage() {
       }))
       .filter((subcategory) => subcategory.techniques.length > 0);
   }, [category, normalizedQuery]);
+  const activeSubcategory = visibleSubcategories.find((item) => item.name === selectedSubcategory)
+    || visibleSubcategories[0];
+
+  if (!category && catalogStatus === "loading") {
+    return <main className="page category-page"><div className="studio-empty"><span>…</span><h3>Loading discipline</h3><p>Preparing the latest catalog.</p></div></main>;
+  }
 
   if (!category) {
     return <Navigate to="/" replace />;
@@ -47,8 +56,8 @@ export default function CategoryPage() {
         <h1>{category.category}</h1>
         <p className="category-hero__copy">
           {isAdminStudio
-            ? "Choose a subcategory and technique to open Admin Studio research controls."
-            : "Choose a subcategory, pick a technique, then open Training Studio to train or practice."}
+            ? "Choose a subcategory and technique to open the Admin Studio controls."
+            : "Choose a subcategory and technique, then open Training Studio to explore the Guide, Train, Practice, or Analysis mode."}
         </p>
         <div className="category-hero__tools">
           <span>{category.subcategories.length} {category.subcategories.length === 1 ? "program" : "programs"}</span>
@@ -68,19 +77,26 @@ export default function CategoryPage() {
         </div>
       </section>
 
-      <section className="subcategory-grid">
-        {visibleSubcategories.map((subcategory) => (
-          <article className="subcategory-card" key={subcategory.name}>
-            <div className="panel-heading">
-              <div>
-                <p className="eyebrow">Subcategory</p>
-                <h2>{subcategory.name}</h2>
-              </div>
-              <span>{subcategory.techniques.length} {subcategory.techniques.length === 1 ? "technique" : "techniques"}</span>
-            </div>
+      <section className="category-browser">
+        <aside className="category-browser__sidebar" aria-label="Subcategories">
+          <p className="eyebrow">Browse sections</p>
+          {visibleSubcategories.map((subcategory) => (
+            <button className={`category-browser__tab ${activeSubcategory?.name === subcategory.name ? "is-active" : ""}`} key={subcategory.name} onClick={() => setSelectedSubcategory(subcategory.name)} type="button">
+              <span>{subcategory.name}</span>
+              <small>{subcategory.techniques.length}</small>
+            </button>
+          ))}
+        </aside>
+
+        <div className="category-browser__content">
+          {activeSubcategory ? <details className="subcategory-card" open>
+            <summary className="panel-heading">
+              <div><p className="eyebrow">Selected subcategory</p><h2>{activeSubcategory.name}</h2></div>
+              <span>{activeSubcategory.techniques.length} {activeSubcategory.techniques.length === 1 ? "technique" : "techniques"}<b aria-hidden="true">−</b></span>
+            </summary>
 
             <div className="technique-list">
-              {subcategory.techniques.map((technique) => {
+              {activeSubcategory.techniques.map((technique) => {
                 const requiredPlan = technique.requiredPlan || "FREE_PLAN";
                 const hasAccess = canAccessPlan(userPlan, requiredPlan);
 
@@ -93,6 +109,7 @@ export default function CategoryPage() {
                 >
                   <div className="technique-row__body">
                     <strong>{technique.name}</strong>
+                    <p className="technique-row__description">{technique.description}</p>
                     <span>
                       {technique.difficulty} / {formatPrice(technique.price)}
                     </span>
@@ -107,29 +124,30 @@ export default function CategoryPage() {
                     </small>
                   </div>
                   <div className="technique-row__actions">
-                    {hasAccess ? (
+                    {hasAccess && technique.runtimeReady ? (
                       <Link
                         className="btn btn--light btn--small"
                         to={`/${isAdminStudio ? "admin-training" : "training"}?category=${slugify(
                           category.category
                         )}&subcategory=${slugify(
-                          subcategory.name
+                          activeSubcategory.name
                         )}&technique=${encodeURIComponent(technique.name)}`}
                       >
                         {isAdminStudio ? "Open lab" : "Open Studio"}
                       </Link>
-                    ) : (
+                    ) : technique.runtimeReady ? (
                       <Link className="btn btn--ghost btn--small" to="/pricing">
                         Upgrade
                       </Link>
+                    ) : (
+                      <span className="technique-row__status">Coming soon</span>
                     )}
                   </div>
                 </div>
               );
               })}
             </div>
-          </article>
-        ))}
+          </details> : null}
         {visibleSubcategories.length === 0 ? (
           <div className="studio-empty category-empty">
             <span>00</span>
@@ -138,6 +156,7 @@ export default function CategoryPage() {
             <button className="btn btn--ghost btn--small" onClick={() => setQuery("")} type="button">Clear search</button>
           </div>
         ) : null}
+        </div>
       </section>
 
     </main>

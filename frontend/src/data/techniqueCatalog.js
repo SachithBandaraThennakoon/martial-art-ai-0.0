@@ -1,7 +1,7 @@
 import { listTechniqueDataPackages } from "./techniqueDataRegistry.js";
 import { getTrackingTechniquePackage } from "../tracking/techniquePackageRegistry.js";
 
-const CATEGORY_ORDER = [
+export const CATEGORY_ORDER = [
   "Flexibility & Mobility",
   "Conditioning & Fitness",
   "Technique Training",
@@ -181,6 +181,32 @@ export function slugify(value) {
     .replace(/&/g, "and")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
+}
+
+export function normalizeRuntimeTechnique({ technique, trainingConfig, fallback }) {
+  const techniqueId = technique?.slug || fallback?.id || slugify(technique?.name || "");
+  const steps = (trainingConfig?.steps || []).map((step, index) => ({
+    ...step,
+    difficulty_profiles: step.difficulty_profiles || trainingConfig?.difficulty_profiles || null,
+    step_number: step.step_number ?? index + 1,
+    step_name: step.step_name || `Step ${index + 1}`,
+    angles: step.angles || (step.angle_targets || []).map(({ body_part, min, max }) => ({ body_part, min, max }))
+  }));
+  return {
+    ...fallback,
+    id: techniqueId,
+    name: technique?.name || fallback?.name || techniqueId,
+    trackingPackage: technique?.metadata?.tracking_package || fallback?.trackingPackage || techniqueId,
+    trackingVersion: technique?.metadata?.tracking_version || fallback?.trackingVersion || null,
+    category: technique?.category || fallback?.category || "Technique Training",
+    subcategory: technique?.subcategory || fallback?.subcategory || "General",
+    difficulty: technique?.difficulty || fallback?.difficulty || "Beginner",
+    price: technique?.price ?? fallback?.price ?? 0,
+    requiredPlan: technique?.required_plan || fallback?.requiredPlan || "FREE_PLAN",
+    description: technique?.description || fallback?.description || "",
+    steps,
+    temporalRuntime: trainingConfig?.temporal_runtime || fallback?.temporalRuntime || null
+  };
 }
 
 export function getCategoryBySlug(categorySlug) {

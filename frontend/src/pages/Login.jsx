@@ -1,11 +1,16 @@
 import { useContext, useState } from "react";
-import { Link, useLocation, useNavigate } from "react-router";
+import { Link, Navigate, useLocation, useNavigate } from "react-router";
 import { AuthContext } from "../context/auth";
 import { API_BASE_URL } from "../services/api";
 import AuthStory from "../components/AuthStory";
 
+// Supabase can take over ten seconds to establish a new pooled connection on
+// restricted local networks. Leave room for that connection plus password
+// verification, while still preventing an indefinitely disabled sign-in form.
+const LOGIN_TIMEOUT_MS = 30_000;
+
 export default function Login() {
-  const { login } = useContext(AuthContext);
+  const { authReady, login, token } = useContext(AuthContext);
   const location = useLocation();
   const navigate = useNavigate();
   const [email, setEmail] = useState(location.state?.email || "");
@@ -14,18 +19,28 @@ export default function Login() {
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const registered = location.state?.registered;
+  const destination = location.state?.from;
+
+  // A valid restored tab session should never leave the user at a second login
+  // form. It is both confusing and can create unnecessary refresh sessions.
+  if (authReady && token) {
+    return <Navigate replace to={destination ? `${destination.pathname}${destination.search || ""}` : "/studio"} />;
+  }
 
   const handleLogin = async (event) => {
     event.preventDefault();
     setError("");
     setIsSubmitting(true);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), LOGIN_TIMEOUT_MS);
 
     try {
       const response = await fetch(`${API_BASE_URL}/login`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({ email: email.trim(), password })
+        body: new URLSearchParams({ email: email.trim(), password }),
+        signal: controller.signal
       });
       const data = await response.json().catch(() => ({}));
 
@@ -40,13 +55,17 @@ export default function Login() {
         name: data.name,
         role: data.role
       });
-      const destination = location.state?.from;
       navigate(destination ? `${destination.pathname}${destination.search || ""}` : "/", {
         replace: true
       });
-    } catch {
-      setError("The training service is temporarily unavailable. Please try again shortly.");
+    } catch (requestError) {
+      setError(
+        requestError?.name === "AbortError"
+          ? "Sign-in took too long. Check your connection and try again."
+          : "We can’t sign you in right now. Please try again shortly."
+      );
     } finally {
+      window.clearTimeout(timeout);
       setIsSubmitting(false);
     }
   };
@@ -56,7 +75,7 @@ export default function Login() {
       <AuthStory mode="login" />
       <form className="auth-card" onSubmit={handleLogin}>
         <p className="eyebrow">Welcome back</p>
-        <h1>Continue Training</h1>
+        <h1>Continue training</h1>
         <p className="auth-card__subtitle">Sign in to resume your technique practice.</p>
 
         {registered ? (
@@ -68,6 +87,8 @@ export default function Login() {
           <input
             autoComplete="email"
             autoFocus
+            id="login-email"
+            name="email"
             onChange={(event) => setEmail(event.target.value)}
             placeholder="you@example.com"
             required
@@ -84,6 +105,8 @@ export default function Login() {
           <span className="field__input-wrap">
             <input
               autoComplete="current-password"
+              id="login-password"
+              name="password"
               onChange={(event) => setPassword(event.target.value)}
               placeholder="Enter your password"
               required

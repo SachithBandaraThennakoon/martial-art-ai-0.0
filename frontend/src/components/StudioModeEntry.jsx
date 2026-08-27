@@ -1,6 +1,7 @@
-import { useEffect } from "react";
-import { Link } from "react-router";
+import { useContext, useEffect } from "react";
+import { Link, useLocation } from "react-router";
 import { DEFAULT_STUDIO_MODE, STUDIO_MODES } from "../data/studioModes";
+import { AuthContext } from "../context/auth";
 
 export default function StudioModeEntry({
   backTo = "",
@@ -9,6 +10,9 @@ export default function StudioModeEntry({
   onSelect,
   techniqueName = ""
 }) {
+  const { token } = useContext(AuthContext);
+  const location = useLocation();
+
   useEffect(() => {
     if (!onClose) return undefined;
     const previousOverflow = document.body.style.overflow;
@@ -69,6 +73,9 @@ export default function StudioModeEntry({
             {modeData.isDefault ? (
               <span className="studio-mode-entry__default-badge">Default</span>
             ) : null}
+            {!token && modeKey === "analysis" ? (
+              <span className="studio-mode-entry__locked-badge">Sign in</span>
+            ) : null}
             <span className="studio-mode-entry__number">
               {String(index + 1).padStart(2, "0")}
             </span>
@@ -81,6 +88,22 @@ export default function StudioModeEntry({
           </button>
         ))}
       </div>
+      {!token ? (
+        <div className="studio-mode-entry__guest-access">
+          <div>
+            <strong>Already have an account?</strong>
+            <span>Sign in to save progress and open personal Analysis.</span>
+          </div>
+          <div className="studio-mode-entry__guest-actions">
+            <Link className="btn btn--light btn--small" state={{ from: location }} to="/login">
+              Sign in
+            </Link>
+            <Link className="btn btn--ghost btn--small" state={{ from: location }} to="/register">
+              Create account
+            </Link>
+          </div>
+        </div>
+      ) : null}
       <p className="studio-mode-entry__hint">
         Practice is selected by default. Press Enter to continue, or choose another mode.
       </p>

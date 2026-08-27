@@ -1,10 +1,12 @@
 import { Link, NavLink, useLocation } from "react-router";
 import { useContext, useEffect, useState } from "react";
 import { AuthContext } from "../context/auth";
-import { MAIN_CATEGORIES, slugify } from "../data/techniqueCatalog";
+import { CATEGORY_ORDER, slugify } from "../data/techniqueCatalog";
 
 export default function Navbar() {
-  const { token, logout, userName, userRole } = useContext(AuthContext);
+  const { token, authReady, logout, userName, userRole } = useContext(AuthContext);
+  const mainCategories = CATEGORY_ORDER;
+  const hasVisibleSession = Boolean(token) || (!authReady && Boolean(userName));
   const location = useLocation();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const closeMenu = () => setIsMenuOpen(false);
@@ -53,9 +55,9 @@ export default function Navbar() {
           <div className="navbar__menu-panel" id="primary-navigation-menu">
             <div className="navbar__menu-section">
               <span>Workspace</span>
-              {token ? <NavLink className={studioNavClass} onClick={closeMenu} to="/studio">Studio</NavLink> : null}
-              {token ? <NavLink className={dashboardNavClass} onClick={closeMenu} to="/dashboard/overview">Dashboard</NavLink> : null}
-              {token ? <NavLink className={navClass} onClick={closeMenu} to="/account/privacy">Privacy &amp; account</NavLink> : null}
+              <NavLink className={studioNavClass} onClick={closeMenu} to="/studio">Studio</NavLink>
+              <NavLink className={dashboardNavClass} onClick={closeMenu} to="/dashboard/overview">Dashboard</NavLink>
+              {hasVisibleSession ? <NavLink className={navClass} onClick={closeMenu} to="/account/privacy">Privacy &amp; account</NavLink> : null}
               <NavLink className={navClass} onClick={closeMenu} to="/pricing">Plans</NavLink>
               <NavLink className={navClass} onClick={closeMenu} to="/contact">Contact</NavLink>
               {userRole === "admin" ? (
@@ -69,7 +71,7 @@ export default function Navbar() {
             </div>
             <div className="navbar__menu-section">
               <span>Disciplines</span>
-              {MAIN_CATEGORIES.map((category) => (
+              {mainCategories.map((category) => (
                 <NavLink className={navClass} key={category} onClick={closeMenu} to={`/categories/${slugify(category)}`}>
                   {category}
                 </NavLink>
@@ -86,8 +88,8 @@ export default function Navbar() {
         </Link>
 
         <div className="navbar__primary">
-          {token ? <NavLink to="/studio" className={studioNavClass}>Studio</NavLink> : null}
-          {token ? <NavLink to="/dashboard/overview" className={dashboardNavClass}>Dashboard</NavLink> : null}
+          <NavLink to="/studio" className={studioNavClass}>Studio</NavLink>
+          <NavLink to="/dashboard/overview" className={dashboardNavClass}>Dashboard</NavLink>
           <NavLink to="/pricing" className={navClass}>Plans</NavLink>
           <NavLink to="/contact" className={navClass}>Contact</NavLink>
           {userRole === "admin" ? (
@@ -97,13 +99,13 @@ export default function Navbar() {
       </div>
 
       <div className="navbar__center navbar__categories" aria-label="Training disciplines">
-        {MAIN_CATEGORIES.map((category) => (
+        {mainCategories.map((category) => (
           <NavLink className={navClass} key={category} to={`/categories/${slugify(category)}`}>{category}</NavLink>
         ))}
       </div>
 
       <div className="navbar__right">
-        {!token ? (
+        {!hasVisibleSession ? (
           <>
             <Link to="/login" className="navbar__link">Sign in</Link>
             <Link to="/register" className="btn btn--light btn--small">Start free</Link>

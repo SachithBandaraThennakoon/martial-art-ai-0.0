@@ -9,6 +9,7 @@ import {
   validateTemporalModelMetadata,
   validateUniversalTemporalMetadata
 } from "../src/tracking/temporalModelContract.js";
+import { loadTechniqueTrainingConfig } from "./helpers/loadTechniqueSource.mjs";
 
 const testDirectory = path.dirname(fileURLToPath(import.meta.url));
 
@@ -63,16 +64,11 @@ test("deployed universal model metadata covers Jab and Front Kick", async () => 
     )
   );
   for (const techniqueId of ["jab", "front-kick"]) {
-    const techniqueDirectory = path.resolve(
-      testDirectory,
-      `../../backend/data/techniques/${techniqueId}`
+    const trainingSteps = await loadTechniqueTrainingConfig(
+      path.resolve(testDirectory, "../../backend/data/techniques"),
+      techniqueId
     );
-    const trainingSteps = JSON.parse(
-      await readFile(path.join(techniqueDirectory, "training-steps.json"), "utf8")
-    );
-    const states = trainingSteps.temporal_runtime?.states || JSON.parse(
-      await readFile(path.join(techniqueDirectory, "states.json"), "utf8")
-    );
+    const states = trainingSteps.temporal_runtime.states;
     const result = validateUniversalTemporalMetadata(metadata, {
       id: techniqueId,
       stateNames: states.state_order

@@ -1,12 +1,14 @@
 import { useContext } from "react";
 import { Link } from "react-router";
 import { AuthContext } from "../context/auth";
-import { techniqueCatalog, slugify } from "../data/techniqueCatalog";
+import { slugify } from "../data/techniqueCatalog";
+import { useCatalog } from "../context/CatalogContext";
 import MeditationHero from "../components/MeditationHero/MeditationHero";
 import FloatingParticles from "../components/MeditationHero/components/FloatingParticles";
 
 export default function Home() {
   const { token, userName } = useContext(AuthContext);
+  const { catalog } = useCatalog();
 
   return (
     <main className="page page--home">
@@ -23,11 +25,12 @@ export default function Home() {
       />
 
       <section className="home-loop" id="training-loop">
-        <div className="section-heading"><p className="eyebrow">One training loop</p><h2>Learn it. Repeat it. Understand it.</h2><p>Each Studio mode has one job, so the screen stays focused while your training builds into a useful history.</p></div>
+        <div className="section-heading"><p className="eyebrow">One training loop</p><h2>See it. Learn it. Repeat it. Improve it.</h2><p>Each of the four Studio modes has one clear purpose, taking you from understanding a technique to improving it through measurable practice.</p></div>
         <div className="home-loop__grid">
-          <article><span>01 / Train</span><h3>Follow clear targets</h3><p>Work through technique steps with live angles and short coaching cues.</p><strong>Best for learning</strong></article>
-          <article><span>02 / Practice</span><h3>Build clean repetitions</h3><p>Choose a rep goal, control your pace, and make consistency measurable.</p><strong>Best for repetition</strong></article>
-          <article><span>03 / Analysis</span><h3>Know what to do next</h3><p>Review form, completion, pace, recurring focus areas, and coach recommendations.</p><strong>Best for progress</strong></article>
+          <article><span>01 / Guide</span><h3>Understand the movement</h3><p>Explore an animated 3D reference, key phases, safety guidance, and the principles behind the technique.</p><strong>Best for understanding</strong></article>
+          <article><span>02 / Train</span><h3>Follow clear targets</h3><p>Learn the technique one step at a time with live angles and focused coaching cues.</p><strong>Best for guided learning</strong></article>
+          <article><span>03 / Practice</span><h3>Build clean repetitions</h3><p>Choose a rep goal, control your pace, and make consistency measurable.</p><strong>Best for repetition</strong></article>
+          <article><span>04 / Analysis</span><h3>Know what to do next</h3><p>Review form, completion, pace, recurring focus areas, and coach recommendations.</p><strong>Best for progress</strong></article>
         </div>
       </section>
 
@@ -46,7 +49,7 @@ export default function Home() {
       <section className="home-catalog">
         <div className="section-heading"><p className="eyebrow">Training library</p><h2>Choose the skill you want to sharpen.</h2></div>
         <div className="home-categories" aria-label="Main categories">
-          {techniqueCatalog.map((category, index) => (
+          {catalog.map((category, index) => (
             <Link className="home-category-link" key={category.category} to={`/categories/${slugify(category.category)}`}>
               <span>{String(index + 1).padStart(2, "0")} · {category.subcategories.length} {category.subcategories.length === 1 ? "program" : "programs"}</span><strong>{category.category}</strong><b aria-hidden="true">↗</b>
             </Link>

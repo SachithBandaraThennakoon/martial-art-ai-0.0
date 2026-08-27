@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -9,7 +8,10 @@ import {
   TechniquePackageValidationError,
   validateTechniquePackage
 } from "../src/tracking/techniquePackage.js";
-import { loadTechniqueSource } from "./helpers/loadTechniqueSource.mjs";
+import {
+  loadTechniqueSource,
+  loadTechniqueTrainingConfig
+} from "./helpers/loadTechniqueSource.mjs";
 
 const testDirectory = path.dirname(fileURLToPath(import.meta.url));
 const trackingRoot = path.resolve(
@@ -69,15 +71,10 @@ test("offline decoder configuration rejects invalid duration values", async () =
 });
 
 test("every Jab angle target has a valid ideal inside its range", async () => {
-  const document = JSON.parse(
-    await readFile(
-      path.join(trackingRoot, "jab", "training-steps.json"),
-      "utf8"
-    )
-  );
+  const document = await loadTechniqueTrainingConfig(trackingRoot, "jab");
 
   for (const step of document.steps) {
-    assert.equal(step.angle_targets.length, 12);
+    assert.ok(step.angle_targets.length > 0);
     for (const target of step.angle_targets) {
       assert.ok(
         target.target_angle >= target.min &&

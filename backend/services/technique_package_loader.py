@@ -2,101 +2,116 @@ import json
 from pathlib import Path
 
 
-TECHNIQUE_ROOT = Path(__file__).resolve().parents[1] / "data" / "techniques"
-REQUIRED_TECHNIQUE_FILES = ("catalog.json", "training-steps.json")
-TRACKING_FILES = (
-    "manifest.json",
-    "states.json",
-    "transitions.json",
-    "errors.json",
-    "modes.json",
-)
+TECHNIQUE_ROOT = Path(__file__).resolve().parents[1] / "data" / "system-catalog"
 
 
 def _read_json(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def _catalog_payload(technique, technique_id):
+    metadata = technique.get("metadata") or {}
+    return {
+        "schema_version": metadata.get("catalog_schema_version", "1.0"),
+        "id": technique_id,
+        "name": technique.get("name", technique_id.replace("-", " ").title()),
+        "tracking_package": metadata.get("tracking_package", technique_id),
+        "tracking_version": metadata.get("tracking_version", technique.get("version", "1.0.0")),
+        "category": technique.get("category", "Technique Training"),
+        "subcategory": technique.get("subcategory", "General"),
+        "difficulty": technique.get("difficulty", "Beginner"),
+        "price": technique.get("price", 0),
+        "required_plan": technique.get("required_plan", "FREE_PLAN"),
+        "description": technique.get("description", ""),
+    }
+
+
+def _is_runtime_record(record):
+    technique = record.get("technique") or {}
+    training = record.get("training_config") or {}
+    learning = record.get("learning_content") or {}
+    technique_id = str(training.get("technique_id") or "").strip()
+    return (
+        technique.get("status") == "active"
+        and learning.get("status") != "DRAFT"
+        and technique_id == str(technique.get("slug") or "").strip()
+        and bool(training.get("steps"))
+    )
+
+
+def _with_legacy_angles(training_steps):
+    return {
+        **training_steps,
+        "steps": [
+            {
+                **step,
+                # Keep the original angle-only consumer contract available.
+                "angles": step.get("angles") or [
+                    {
+                        "body_part": target["body_part"],
+                        "min": target["min"],
+                        "max": target["max"],
+                    }
+                    for target in step.get("angle_targets", [])
+                ],
+            }
+            for step in training_steps.get("steps", [])
+        ],
+    }
+
+
 def load_technique_packages(root=TECHNIQUE_ROOT):
-    """Load enabled technique packages in the order declared by index.json."""
+    """Load complete active techniques directly from the system catalog."""
     root = Path(root).resolve()
-    index = _read_json(root / "index.json")
     packages = []
     seen_ids = set()
 
-    for entry in index.get("techniques", []):
-        if entry.get("enabled", True) is False:
+    for source_file in sorted((root / "techniques").glob("*.json")):
+        record = _read_json(source_file)
+        if not _is_runtime_record(record):
             continue
 
-        technique_id = str(entry.get("id") or "").strip()
-        if not technique_id:
-            raise ValueError("Technique index entries require an id")
+        technique = record["technique"]
+        training_steps = _with_legacy_angles(record["training_config"])
+        technique_id = str(training_steps["technique_id"]).strip()
         if technique_id in seen_ids:
             raise ValueError(f'Duplicate technique id "{technique_id}"')
         seen_ids.add(technique_id)
-
-        directory_name = str(entry.get("directory") or technique_id)
-        directory = (root / directory_name).resolve()
-        if root not in directory.parents:
-            raise ValueError(f'Technique "{technique_id}" resolves outside the data root')
-
-        missing = [
-            file_name
-            for file_name in REQUIRED_TECHNIQUE_FILES
-            if not (directory / file_name).is_file()
-        ]
-        if missing:
-            raise ValueError(
-                f'Technique "{technique_id}" is missing: {", ".join(missing)}'
-            )
-
-        catalog = _read_json(directory / "catalog.json")
-        training_steps = _read_json(directory / "training-steps.json")
-        if catalog.get("id") != technique_id:
-            raise ValueError(
-                f'Technique index id "{technique_id}" does not match catalog id'
-            )
-        if training_steps.get("technique_id") != technique_id:
-            raise ValueError(
-                f'Technique "{technique_id}" has a mismatched training-steps id'
-            )
-
-        tracking_paths = {
-            file_name: directory / file_name for file_name in TRACKING_FILES
-        }
-        embedded_tracking = training_steps.get("temporal_runtime")
-        present_tracking_files = [
-            file_name for file_name, path in tracking_paths.items() if path.is_file()
-        ]
-        if (
-            not embedded_tracking
-            and present_tracking_files
-            and len(present_tracking_files) != len(TRACKING_FILES)
-        ):
-            missing_tracking = [
-                file_name
-                for file_name in TRACKING_FILES
-                if file_name not in present_tracking_files
-            ]
-            raise ValueError(
-                f'Technique "{technique_id}" has an incomplete tracking package; '
-                f'missing: {", ".join(missing_tracking)}'
-            )
-
         packages.append({
-            "index": entry,
-            "catalog": catalog,
+            "index": {
+                "id": technique_id,
+                "directory": str(source_file.relative_to(root)),
+                "enabled": True,
+                "catalog_version": "1.0.0",
+                **({"tracking_version": "1.0.0"} if training_steps.get("temporal_runtime") else {}),
+            },
+            "catalog": _catalog_payload(technique, technique_id),
             "training_steps": training_steps,
-            "directory": directory,
-            "has_tracking": bool(embedded_tracking)
-            or len(present_tracking_files) == len(TRACKING_FILES),
+            "directory": source_file.parent,
+            "source_file": source_file,
+            "has_tracking": bool(training_steps.get("temporal_runtime")),
         })
 
     return packages
 
 
+def load_technique_record(technique_id, root=TECHNIQUE_ROOT):
+    """Load one source record by slug for Guide and other read-only consumers."""
+    requested_id = str(technique_id or "").strip().lower()
+    if not requested_id:
+        return None
+
+    root = Path(root).resolve()
+    for source_file in sorted((root / "techniques").glob("*.json")):
+        record = _read_json(source_file)
+        technique = record.get("technique") or {}
+        if str(technique.get("slug") or "").strip().lower() == requested_id:
+            return record
+    return None
+
+
 def load_technique_catalog(root=TECHNIQUE_ROOT):
-    """Return the legacy-compatible catalog shape assembled from packages."""
+    """Return the legacy-compatible catalog shape assembled from source records."""
     def legacy_step(step):
         if step.get("angles"):
             return step
@@ -104,11 +119,7 @@ def load_technique_catalog(root=TECHNIQUE_ROOT):
         return {
             **step,
             "angles": [
-                {
-                    "body_part": target["body_part"],
-                    "min": target["min"],
-                    "max": target["max"],
-                }
+                {"body_part": target["body_part"], "min": target["min"], "max": target["max"]}
                 for target in angle_targets
             ],
         }
@@ -118,10 +129,7 @@ def load_technique_catalog(root=TECHNIQUE_ROOT):
         "techniques": [
             {
                 **package["catalog"],
-                "steps": [
-                    legacy_step(step)
-                    for step in package["training_steps"].get("steps", [])
-                ],
+                "steps": [legacy_step(step) for step in package["training_steps"].get("steps", [])],
             }
             for package in load_technique_packages(root)
         ],

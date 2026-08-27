@@ -46,7 +46,7 @@ export default function ResetPassword() {
       setConfirmation("");
       setStatus({ type: "success", message: data.message || "Password updated successfully." });
     } catch (error) {
-      setStatus({ type: "error", message: error.message || "The service is temporarily unavailable." });
+      setStatus({ type: "error", message: error.message || "Password reset is temporarily unavailable. Please try again." });
     }
   };
 

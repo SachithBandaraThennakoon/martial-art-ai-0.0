@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router";
+import { Link, useLocation, useNavigate } from "react-router";
 import { API_BASE_URL } from "../services/api";
 import AuthStory from "../components/AuthStory";
 
 export default function Register() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -14,7 +15,6 @@ export default function Register() {
   const [legalDocuments, setLegalDocuments] = useState(null);
   const [acceptPrivacy, setAcceptPrivacy] = useState(false);
   const [acceptTerms, setAcceptTerms] = useState(false);
-  const [confirmMinimumAge, setConfirmMinimumAge] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -22,7 +22,7 @@ export default function Register() {
       .then((response) => response.ok ? response.json() : Promise.reject())
       .then(setLegalDocuments)
       .catch(() => {
-        if (!controller.signal.aborted) setError("Registration is temporarily unavailable while legal documents load.");
+        if (!controller.signal.aborted) setError("We can’t load the documents required for registration. Please try again shortly.");
       });
     return () => controller.abort();
   }, []);
@@ -44,7 +44,6 @@ export default function Register() {
           terms_version: legalDocuments?.terms_version || "",
           accept_privacy: String(acceptPrivacy),
           accept_terms: String(acceptTerms),
-          confirm_minimum_age: String(confirmMinimumAge)
         })
       });
       const data = await response.json().catch(() => ({}));
@@ -54,9 +53,9 @@ export default function Register() {
         return;
       }
 
-      navigate("/login", { replace: true, state: { email: email.trim(), registered: true } });
+      navigate("/login", { replace: true, state: { email: email.trim(), registered: true, from: location.state?.from } });
     } catch {
-      setError("The training service is temporarily unavailable. Please try again shortly.");
+      setError("We can’t create your account right now. Please try again shortly.");
     } finally {
       setIsSubmitting(false);
     }
@@ -66,9 +65,9 @@ export default function Register() {
     <main className="page auth-page">
       <AuthStory mode="register" />
       <form className="auth-card" onSubmit={handleRegister}>
-        <p className="eyebrow">Your first session starts here</p>
-        <h1>Create Account</h1>
-        <p className="auth-card__subtitle">Start free and get live form feedback in minutes.</p>
+        <p className="eyebrow">Your training space starts here</p>
+        <h1>Create your account</h1>
+        <p className="auth-card__subtitle">Start free, learn your first technique, and get focused coaching in minutes.</p>
 
         <label className="field">
           <span>Full name</span>
@@ -103,16 +102,15 @@ export default function Register() {
         <div className="auth-consents">
           <label><input checked={acceptPrivacy} onChange={(event) => setAcceptPrivacy(event.target.checked)} required type="checkbox" /> <span>I accept the <Link target="_blank" to="/privacy">privacy notice</Link>.</span></label>
           <label><input checked={acceptTerms} onChange={(event) => setAcceptTerms(event.target.checked)} required type="checkbox" /> <span>I accept the <Link target="_blank" to="/terms">terms of use</Link>.</span></label>
-          <label><input checked={confirmMinimumAge} onChange={(event) => setConfirmMinimumAge(event.target.checked)} required type="checkbox" /> <span>I confirm that I am at least {legalDocuments?.minimum_age || 18} years old.</span></label>
         </div>
 
         {error ? <p className="form-error" role="alert">{error}</p> : null}
 
-        <button className="btn btn--light btn--full" disabled={isSubmitting || !legalDocuments || !acceptPrivacy || !acceptTerms || !confirmMinimumAge} type="submit">
+        <button className="btn btn--light btn--full" disabled={isSubmitting || !legalDocuments || !acceptPrivacy || !acceptTerms} type="submit">
           {isSubmitting ? "Creating your account…" : "Create free account"}
         </button>
-        <p className="auth-terms">Train safely and within your physical limits.</p>
-        <p className="auth-card__footer">Already have an account? <Link to="/login">Sign in</Link></p>
+        <p className="auth-terms">Train safely, move with purpose, and stay within your physical limits.</p>
+        <p className="auth-card__footer">Already have an account? <Link state={{ from: location.state?.from }} to="/login">Sign in</Link></p>
       </form>
     </main>
   );

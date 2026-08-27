@@ -17,7 +17,7 @@ export default function AccountPrivacy() {
     setStatus("");
     try {
       const response = await authFetch(`${API_BASE_URL}/account/export`);
-      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || "Export failed");
+      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || "We couldn’t prepare your account export.");
       const blob = new Blob([JSON.stringify(await response.json(), null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
@@ -27,7 +27,7 @@ export default function AccountPrivacy() {
       URL.revokeObjectURL(url);
       setStatus("Your account export was downloaded.");
     } catch (error) {
-      setStatus(error.message || "Export is temporarily unavailable.");
+      setStatus(error.message || "Your account export is temporarily unavailable. Please try again.");
     } finally {
       setBusy(false);
     }
@@ -44,11 +44,11 @@ export default function AccountPrivacy() {
         body: JSON.stringify({ password, confirmation })
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.detail || "Account deletion failed");
+      if (!response.ok) throw new Error(data.detail || "We couldn’t delete your account.");
       logout();
       navigate("/", { replace: true });
     } catch (error) {
-      setStatus(error.message || "Account deletion is temporarily unavailable.");
+      setStatus(error.message || "Account deletion is temporarily unavailable. Please try again.");
     } finally {
       setBusy(false);
     }
@@ -60,7 +60,7 @@ export default function AccountPrivacy() {
       <h1>Privacy &amp; account</h1>
       <section className="privacy-card">
         <h2>Download your data</h2>
-        <p>Download your profile, consent, training, practice, calibration, support, and billing metadata as JSON. Movement tapes are listed with authenticated download paths.</p>
+        <p>Download your profile, consent, training, practice, calibration, support, and billing data as a JSON file. The export also lists your movement tapes and secure download links.</p>
         <button className="btn btn--light" disabled={busy} onClick={exportData} type="button">Download account export</button>
       </section>
       <section className="privacy-card privacy-card--danger">
@@ -69,7 +69,7 @@ export default function AccountPrivacy() {
           <p>Administrator accounts require the documented operational deletion process so ownership and audit duties can be reassigned safely.</p>
         ) : (
           <form onSubmit={deleteAccount}>
-            <p>This is irreversible. Active PayPal access is cancelled first, stored tapes and account records are erased, and residual backups expire on their configured cycle.</p>
+            <p>This action cannot be undone. Your active PayPal subscription is canceled first, then your stored tapes and account records are erased. Residual backups expire according to their retention schedule.</p>
             <label className="field"><span>Current password</span><input autoComplete="current-password" onChange={(event) => setPassword(event.target.value)} required type="password" value={password} /></label>
             <label className="field"><span>Type DELETE</span><input onChange={(event) => setConfirmation(event.target.value)} pattern="DELETE" required value={confirmation} /></label>
             <button className="btn btn--danger" disabled={busy || confirmation !== "DELETE"} type="submit">Permanently delete account</button>

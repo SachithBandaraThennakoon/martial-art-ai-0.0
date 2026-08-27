@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import TrainMode from "../modes/TrainMode";
 import PracticeMode from "../modes/PracticeMode";
 import PracticeAnalysisMode from "../modes/PracticeAnalysisMode";
+import GuideMode from "../modes/GuideMode";
 import StudioModeEntry from "../components/StudioModeEntry";
 import { DEFAULT_STUDIO_MODE, STUDIO_MODES } from "../data/studioModes";
 import useBodyCalibration from "../hooks/useBodyCalibration";
@@ -12,7 +13,7 @@ import {
   unlockVoicePlayback
 } from "../services/browserVoice";
 
-export default function TrainingStudio({ studioMode = "student" }) {
+export default function TrainingStudio({ analysisPreview = false, studioMode = "student" }) {
   const location = useLocation();
   const navigate = useNavigate();
   const searchParams = new URLSearchParams(location.search);
@@ -37,18 +38,11 @@ export default function TrainingStudio({ studioMode = "student" }) {
     return STUDIO_PERFORMANCE_MODES[storedMode] ? storedMode : "auto";
   });
   const [skeletonLayers, setSkeletonLayers] = useState({
-    level1: false,
-    onnx: false
+    level1: false
   });
   const [adminInputSource, setAdminInputSource] = useState("live");
   const [adminVideo, setAdminVideo] = useState(null);
   const [adminInputStatus, setAdminInputStatus] = useState("Live camera selected");
-  const [acpPredictionStatus, setAcpPredictionStatus] = useState({
-    status: "idle",
-    ready: false,
-    landmarks: 0,
-    error: null
-  });
   const videoInputRef = useRef(null);
   const bodyCalibration = useBodyCalibration();
   const requestedMode = searchParams.get("mode");
@@ -166,12 +160,14 @@ export default function TrainingStudio({ studioMode = "student" }) {
 
   const activeSkeletonLayers = isAdminStudio
     ? skeletonLayers
-    : { level1: false, onnx: false, corrections: true };
+    : { level1: false, corrections: true };
 
   return (
     <main
       className={`training-shell ${isAdminStudio ? "training-shell--admin" : ""} ${
         mode === "analysis" ? "training-shell--analysis" : ""
+      } ${
+        mode === "guide" ? "training-shell--guide" : ""
       }`}
     >
       {requiresModeChoice ? (
@@ -220,7 +216,7 @@ export default function TrainingStudio({ studioMode = "student" }) {
           ← Library
         </Link>
 
-        {mode !== "analysis" ? (
+        {!['analysis', 'guide'].includes(mode) ? (
         <div className="coach-toggles" aria-label="Coach output controls">
           <label className="studio-performance-control">
             <span>Performance</span>
@@ -262,7 +258,7 @@ export default function TrainingStudio({ studioMode = "student" }) {
         </div>
         ) : null}
 
-        {isAdminStudio && mode !== "analysis" ? (
+        {isAdminStudio && !['analysis', 'guide'].includes(mode) ? (
           <div className="admin-input-source" aria-label="Admin evaluation input source">
             <div className="admin-input-source__heading">
               <span>Evaluation input</span>
@@ -320,8 +316,8 @@ export default function TrainingStudio({ studioMode = "student" }) {
           </div>
         ) : null}
 
-        {isAdminStudio && mode !== "analysis" ? (
-          <div className="coach-toggles coach-toggles--skeleton" aria-label="Research skeleton layers">
+        {isAdminStudio && !['analysis', 'guide'].includes(mode) ? (
+          <div className="coach-toggles coach-toggles--skeleton" aria-label="Skeleton layers">
             <button
               aria-pressed={activeSkeletonLayers.level1}
               className={`coach-toggle-button ${activeSkeletonLayers.level1 ? "is-active" : ""}`}
@@ -330,31 +326,16 @@ export default function TrainingStudio({ studioMode = "student" }) {
             >
               Yellow L1 {activeSkeletonLayers.level1 ? "On" : "Off"}
             </button>
-            <button
-              aria-pressed={activeSkeletonLayers.onnx}
-              className={`coach-toggle-button ${activeSkeletonLayers.onnx ? "is-active" : ""}`}
-              onClick={() => toggleSkeletonLayer("onnx")}
-              title={
-                acpPredictionStatus.error ||
-                `ACP runtime: ${acpPredictionStatus.status}`
-              }
-              type="button"
-            >
-              Blue ACP{" "}
-              {activeSkeletonLayers.onnx
-                ? acpPredictionStatus.ready
-                  ? "Ready"
-                  : acpPredictionStatus.status === "load_failed" ||
-                      acpPredictionStatus.status === "run_failed"
-                    ? "Error"
-                    : "Loading"
-                : "Off"}
-            </button>
           </div>
         ) : null}
       </div>
 
-      {mode === "train" ? (
+      {mode === "guide" ? (
+        <GuideMode
+          isAdminStudio={isAdminStudio}
+          selectedTechniqueName={selectedTechniqueName}
+        />
+      ) : mode === "train" ? (
         <TrainMode
           categorySlug={categorySlug}
           displayMirrored={displayMirrored}
@@ -375,7 +356,6 @@ export default function TrainingStudio({ studioMode = "student" }) {
           inputVideoUrl={adminVideo?.url || null}
           inputVideoName={adminVideo?.name || null}
           onInputStatus={setAdminInputStatus}
-          onPredictionStatus={setAcpPredictionStatus}
         />
       ) : mode === "practice" ? (
         <PracticeMode
@@ -396,10 +376,10 @@ export default function TrainingStudio({ studioMode = "student" }) {
           inputVideoUrl={adminVideo?.url || null}
           inputVideoName={adminVideo?.name || null}
           onInputStatus={setAdminInputStatus}
-          onPredictionStatus={setAcpPredictionStatus}
         />
       ) : (
         <PracticeAnalysisMode
+          previewMode={analysisPreview}
           hasTechniqueSelection={hasTechniqueSelection}
           onModeChange={updateMode}
           onOpenLibrary={() => navigate(isAdminStudio ? "/admin-studio" : "/studio")}

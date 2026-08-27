@@ -7,8 +7,38 @@ from models.technique import Technique
 from models.technique_step import TechniqueStep
 from models.target_angle import TargetAngle
 from models.user import User
+from services.technique_package_loader import load_technique_record
 
 router = APIRouter(prefix="/techniques", tags=["Techniques"])
+
+
+@router.get("/guide/{technique_id}")
+def get_technique_guide(technique_id: str):
+    """Return published learning content and movement phases from the system catalog."""
+    record = load_technique_record(technique_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Technique Guide is not available")
+
+    technique = record.get("technique") or {}
+    content = record.get("learning_content")
+    training = record.get("training_config") or {}
+    if (
+        technique.get("status") != "active"
+        or not isinstance(content, dict)
+        or content.get("status") != "PUBLISHED"
+        or not isinstance(training.get("steps"), list)
+        or not training.get("steps")
+    ):
+        raise HTTPException(status_code=404, detail="Technique Guide is not available")
+
+    return {
+        "id": technique.get("slug"),
+        "name": technique.get("name"),
+        "difficulty": technique.get("difficulty"),
+        "description": technique.get("description", ""),
+        "learning_content": content,
+        "steps": training["steps"],
+    }
 
 
 # -------------------------

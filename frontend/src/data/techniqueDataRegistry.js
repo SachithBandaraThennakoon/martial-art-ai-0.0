@@ -1,77 +1,68 @@
-import techniqueIndex from "../../../backend/data/techniques/index.json";
-
 const techniqueFiles = import.meta.glob(
-  "../../../backend/data/techniques/*/*.json",
-  {
-    eager: true,
-    import: "default"
-  }
+  "../../../backend/data/system-catalog/techniques/*.json",
+  { eager: true, import: "default" }
 );
 
-const filesByTechnique = new Map();
+function buildDataPackage(filePath, record) {
+  const technique = record?.technique || {};
+  const trainingSteps = record?.training_config || {};
+  const learningContent = record?.learning_content || {};
+  const techniqueId = String(trainingSteps.technique_id || "").trim();
+  if (
+    technique.status !== "active" ||
+    learningContent.status === "DRAFT" ||
+    !techniqueId ||
+    technique.slug !== techniqueId ||
+    !Array.isArray(trainingSteps.steps) ||
+    trainingSteps.steps.length === 0
+  ) return null;
 
-Object.entries(techniqueFiles).forEach(([filePath, payload]) => {
-  const match = filePath
-    .replace(/\\/g, "/")
-    .match(/\/data\/techniques\/([^/]+)\/([^/]+)\.json$/);
-  if (!match) return;
-
-  const [, techniqueId, fileName] = match;
-  const files = filesByTechnique.get(techniqueId) || {};
-  files[fileName] = payload;
-  filesByTechnique.set(techniqueId, files);
-});
-
-function buildDataPackage(indexEntry) {
-  const files = filesByTechnique.get(indexEntry.id);
-  if (!files?.catalog || !files?.["training-steps"]) {
-    throw new Error(
-      `Technique package "${indexEntry.id}" requires catalog.json and training-steps.json`
-    );
-  }
-  if (files.catalog.id !== indexEntry.id) {
-    throw new Error(
-      `Technique index id "${indexEntry.id}" does not match catalog id "${files.catalog.id}"`
-    );
-  }
-  if (files["training-steps"].technique_id !== indexEntry.id) {
-    throw new Error(
-      `Technique "${indexEntry.id}" has a mismatched training-steps technique_id`
-    );
-  }
-
-  const trackingFileNames = [
-    "manifest",
-    "states",
-    "transitions",
-    "errors",
-    "modes"
-  ];
-  const trackingFileCount = trackingFileNames.filter((name) => files[name]).length;
-  const embeddedTracking = files["training-steps"].temporal_runtime || null;
-  if (trackingFileCount > 0 && trackingFileCount < trackingFileNames.length) {
-    throw new Error(
-      `Technique "${indexEntry.id}" has an incomplete temporal tracking package`
-    );
-  }
+  const metadata = technique.metadata || {};
+  const normalizedTrainingSteps = {
+    ...trainingSteps,
+    steps: trainingSteps.steps.map((step) => ({
+      ...step,
+      // Backward-compatible shape for the original angle-only feedback path.
+      angles: step.angles?.length
+        ? step.angles
+        : (step.angle_targets || []).map(({ body_part, min, max }) => ({
+            body_part,
+            min,
+            max
+          }))
+    }))
+  };
+  const catalog = {
+    schema_version: metadata.catalog_schema_version || "1.0",
+    id: techniqueId,
+    name: technique.name || techniqueId,
+    tracking_package: metadata.tracking_package || techniqueId,
+    tracking_version: metadata.tracking_version || technique.version || "1.0.0",
+    category: technique.category || "Technique Training",
+    subcategory: technique.subcategory || "General",
+    difficulty: technique.difficulty || "Beginner",
+    price: technique.price ?? 0,
+    required_plan: technique.required_plan || "FREE_PLAN",
+    description: technique.description || ""
+  };
 
   return {
-    index: indexEntry,
-    catalog: files.catalog,
-    trainingSteps: files["training-steps"],
-    trackingSource:
-      embeddedTracking ||
-      (
-        trackingFileCount === trackingFileNames.length
-          ? Object.fromEntries(trackingFileNames.map((name) => [name, files[name]]))
-          : null
-      )
+    index: {
+      id: techniqueId,
+      directory: filePath,
+      enabled: true,
+      catalog_version: "1.0.0",
+      ...(trainingSteps.temporal_runtime ? { tracking_version: "1.0.0" } : {})
+    },
+    catalog,
+    trainingSteps: normalizedTrainingSteps,
+    trackingSource: trainingSteps.temporal_runtime || null
   };
 }
 
-const dataPackages = techniqueIndex.techniques
-  .filter((entry) => entry.enabled !== false)
-  .map(buildDataPackage);
+const dataPackages = Object.entries(techniqueFiles)
+  .map(([filePath, record]) => buildDataPackage(filePath, record))
+  .filter(Boolean);
 
 const dataPackageRegistry = new Map(
   dataPackages.map((dataPackage) => [dataPackage.index.id, dataPackage])

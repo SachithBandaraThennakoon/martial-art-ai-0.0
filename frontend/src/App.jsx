@@ -1,9 +1,11 @@
 import { lazy, Suspense } from "react";
 import { BrowserRouter, Routes, Route, useLocation } from "react-router";
 import { AuthProvider } from "./context/AuthContext";
+import { CatalogProvider } from "./context/CatalogContext";
 import Navbar from "./components/Navbar";
 import Footer from "./components/Footer";
 import ProtectedRoute from "./components/ProtectedRoute";
+import AnalyticsSamplePreview from "./components/AnalyticsSamplePreview";
 import FloatingParticles from "./components/MeditationHero/components/FloatingParticles";
 
 import Home from "./pages/Home";
@@ -21,18 +23,36 @@ import Terms from "./pages/Terms";
 import AccountPrivacy from "./pages/AccountPrivacy";
 
 const Training = lazy(() => import("./pages/Training"));
-const ModelTestPage = lazy(() => import("./pages/ModelTestPage"));
-const TemporalDataLab = lazy(() => import("./pages/TemporalDataLab"));
 const Dashboard = lazy(() => import("./pages/Dashboard"));
+const ManualTechniqueCatalogAdmin = lazy(() => import("./pages/ManualTechniqueCatalogAdmin"));
+
+function TrainingRoute() {
+  const location = useLocation();
+  const searchParams = new URLSearchParams(location.search);
+  const mode = searchParams.get("mode");
+  const techniqueName = searchParams.get("technique") || "Jab";
+  const training = <Training />;
+
+  return mode === "analysis"
+    ? (
+        <ProtectedRoute
+          preview={<AnalyticsSamplePreview techniqueName={techniqueName} variant="analysis" />}
+        >
+          {training}
+        </ProtectedRoute>
+      )
+    : training;
+}
 
 function AppRoutes() {
   const location = useLocation();
   const isStudio =
-    location.pathname === "/training" || location.pathname === "/admin-training";
+    location.pathname === "/training" || location.pathname === "/admin-training" || location.pathname === "/admin-manual-catalog";
   const isLiveStudioRoute = [
     "/admin-studio",
     "/training",
     "/admin-training",
+    "/admin-manual-catalog",
   ].includes(location.pathname);
   const showSharedParticles = location.pathname !== "/" && !isLiveStudioRoute;
   const isDashboard = location.pathname.startsWith("/dashboard");
@@ -65,18 +85,10 @@ function AppRoutes() {
         <Route path="/pricing" element={<Pricing />} />
         <Route path="/contact" element={<Contact />} />
         <Route
-          path="/model-test"
+          path="/admin-manual-catalog"
           element={
             <ProtectedRoute requiredRole="admin">
-              <ModelTestPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/admin-temporal-data"
-          element={
-            <ProtectedRoute requiredRole="admin">
-              <TemporalDataLab />
+              <ManualTechniqueCatalogAdmin />
             </ProtectedRoute>
           }
         />
@@ -88,19 +100,12 @@ function AppRoutes() {
         <Route path="/terms" element={<Terms />} />
         <Route path="/account/privacy" element={<ProtectedRoute><AccountPrivacy /></ProtectedRoute>} />
 
-        <Route
-          path="/studio"
-          element={
-            <ProtectedRoute>
-              <Studio />
-            </ProtectedRoute>
-          }
-        />
+        <Route path="/studio" element={<Studio />} />
 
         <Route
           path="/dashboard/:page?"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute preview={<AnalyticsSamplePreview variant="dashboard" />}>
               <Dashboard />
             </ProtectedRoute>
           }
@@ -115,14 +120,7 @@ function AppRoutes() {
           }
         />
 
-        <Route
-          path="/training"
-          element={
-            <ProtectedRoute>
-              <Training />
-            </ProtectedRoute>
-          }
-        />
+        <Route path="/training" element={<TrainingRoute />} />
 
         <Route
           path="/admin-training"
@@ -145,7 +143,9 @@ function App() {
   return (
     <AuthProvider>
       <BrowserRouter>
-        <AppRoutes />
+        <CatalogProvider>
+          <AppRoutes />
+        </CatalogProvider>
       </BrowserRouter>
     </AuthProvider>
   );

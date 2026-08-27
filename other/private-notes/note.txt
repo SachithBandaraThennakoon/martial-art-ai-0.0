@@ -29,6 +29,10 @@ Remove-Item -Path "C:\Users\DELL\OneDrive - Vantage Ltd\Documents\New project\ma
 /admin-temporal-data
 
 
+deactivate
+.\venv\Scripts\Activate.ps1
+python -m uvicorn main:app --reload
+
 Main meanings:
 IDLE: visible but not performing or preparing.
 PREPARATION: getting ready before the first technique state.
