@@ -22,6 +22,7 @@ export function AuthProvider({ children }) {
   const [userRole, setUserRole] = useState("user");
   const [userName, setUserName] = useState("");
   const [subscriptionStatus, setSubscriptionStatus] = useState("inactive");
+  const [isGuest, setIsGuest] = useState(false);
   const [authReady, setAuthReady] = useState(false);
 
   const applyProfile = useCallback((profile = {}) => {
@@ -29,6 +30,7 @@ export function AuthProvider({ children }) {
     setUserRole(profile.role || "user");
     setUserName(profile.name || "");
     setSubscriptionStatus(profile.subscription_status || "inactive");
+    setIsGuest(Boolean(profile.is_guest));
   }, []);
 
   const login = useCallback((newToken, plan = "FREE_PLAN", profile = {}) => {
@@ -40,6 +42,19 @@ export function AuthProvider({ children }) {
     applyProfile({ ...profile, plan });
     setAuthReady(true);
   }, [applyProfile]);
+
+  const loginAsGuest = useCallback(async () => {
+    const response = await fetch(`${API_BASE_URL}/guest-session`, {
+      method: "POST",
+      credentials: "include"
+    });
+    const session = await response.json().catch(() => ({}));
+    if (!response.ok || !session.access_token) {
+      throw new Error(session.detail || "Guest mode is temporarily unavailable.");
+    }
+    login(session.access_token, session.plan || "FREE_PLAN", session);
+    return session;
+  }, [login]);
 
   const logout = useCallback(() => {
     localStorage.removeItem("token");
@@ -126,12 +141,14 @@ export function AuthProvider({ children }) {
         token,
         authReady,
         login,
+        loginAsGuest,
         logout,
         refreshProfile,
         userPlan,
         userRole,
         userName,
-        subscriptionStatus
+        subscriptionStatus,
+        isGuest
       }}
     >
       {children}

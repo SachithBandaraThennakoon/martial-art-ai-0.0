@@ -9,7 +9,9 @@ export default function MetricsPanel({
   compositeForm,
   showFullBodyAssessment = false,
   difficulty = "medium",
-  onDifficultyChange
+  onDifficultyChange,
+  masteryThreshold = 80,
+  onMasteryThresholdChange
 }) {
   const currentStep = steps[currentStepIndex];
   const topCompositeCorrection = compositeForm?.corrections?.[0];
@@ -67,7 +69,7 @@ export default function MetricsPanel({
 
   return (
     <div className="metrics-panel">
-      <div className={`accuracy-card ${accuracy >= 80 ? "is-good" : "is-low"}`}>
+      <div className={`accuracy-card ${accuracy >= masteryThreshold ? "is-good" : "is-low"}`}>
         <div className="accuracy-card__summary">
           <span>Full-body Form Match</span>
           <strong>{compositeForm?.scorable ? `${accuracy}%` : "--"}</strong>
@@ -86,6 +88,19 @@ export default function MetricsPanel({
             </button>
           ))}
         </div>
+        <label className="mastery-threshold-control">
+          <span>Move-on score</span>
+          <input
+            aria-label="Accuracy required before suggesting the next step"
+            max="95"
+            min="70"
+            onChange={(event) => onMasteryThresholdChange?.(event.target.value)}
+            step="1"
+            type="range"
+            value={masteryThreshold}
+          />
+          <output>{masteryThreshold}%</output>
+        </label>
       </div>
 
       <div className="panel-block focus-board">

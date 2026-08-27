@@ -80,6 +80,7 @@ const VOICE_INTERRUPT_ACTIONS = new Set([
 ]);
 
 const NATURAL_VOICE_CACHE_LIMIT = 24;
+const MASTERY_HOLD_MS = 1200;
 const splitVoiceWords = (message) =>
   message
     .trim()
@@ -138,6 +139,10 @@ export default function TrainMode({
   const [formDifficulty, setFormDifficulty] = useState(
     () => localStorage.getItem("studioFormDifficulty") || "medium"
   );
+  const [masteryThreshold, setMasteryThreshold] = useState(() => {
+    const stored = Number(localStorage.getItem("studioMasteryThreshold"));
+    return Number.isFinite(stored) && stored >= 70 && stored <= 95 ? stored : 80;
+  });
   const [ruleEngineFrame, setRuleEngineFrame] = useState(null);
   const [feedback, setFeedback] = useState("");
   const [coachEvent, setCoachEvent] = useState(null);
@@ -177,6 +182,8 @@ export default function TrainMode({
   const lastSpokenIntentRef = useRef("");
   const announcedEntryRef = useRef(false);
   const pendingStepTransitionRef = useRef(null);
+  const masteryHoldRef = useRef({ key: "", firstSeenAt: 0, prompted: false });
+  const pendingCoachResponseRef = useRef(null);
   const compositeFeedbackRef = useRef({
     signature: "",
     firstSeenAt: 0,
@@ -440,6 +447,12 @@ export default function TrainMode({
 
   const handleCoachEvent = useCallback((event) => {
     if (
+      pendingCoachResponseRef.current &&
+      ["correct", "observe", "hold_good", "waiting"].includes(event?.action)
+    ) {
+      return;
+    }
+    if (
       Date.now() < localFeedbackPriorityUntilRef.current &&
       ["correct", "observe", "hold_good", "waiting"].includes(event?.action)
     ) {
@@ -594,6 +607,10 @@ export default function TrainMode({
     const trimmed = message.trim();
 
     if (!trimmed) return;
+    if (pendingCoachResponseRef.current) {
+      pendingCoachResponseRef.current = null;
+      localFeedbackPriorityUntilRef.current = Date.now() + 3000;
+    }
 
     const navigation = parseTrainingStepCommand(trimmed, steps.length);
     if (navigation) {
@@ -1026,6 +1043,88 @@ export default function TrainMode({
   }, []);
 
   useEffect(() => {
+    const stepKey = `${currentTechnique?.id || "technique"}:${currentStep?.id || safeStepIndex}:${masteryThreshold}`;
+    const masteryState = masteryHoldRef.current;
+    if (masteryState.key !== stepKey) {
+      masteryState.key = stepKey;
+      masteryState.firstSeenAt = 0;
+      masteryState.prompted = false;
+    }
+
+    const meetsThreshold = Boolean(
+      trainSessionActive &&
+      !requiresResponse &&
+      compositeForm.scorable &&
+      compositeForm.coverage >= 50 &&
+      compositeForm.accuracy >= masteryThreshold
+    );
+    if (!meetsThreshold) {
+      masteryState.firstSeenAt = 0;
+      return;
+    }
+    if (masteryState.prompted) return;
+
+    const now = Date.now();
+    if (!masteryState.firstSeenAt) {
+      masteryState.firstSeenAt = now;
+      return;
+    }
+    if (now - masteryState.firstSeenAt < MASTERY_HOLD_MS) return;
+
+    masteryState.prompted = true;
+    const isLastStep = safeStepIndex >= steps.length - 1;
+    const message = isLastStep
+      ? `You held ${compositeForm.accuracy}% form. Repeat this final step, or finish and review?`
+      : `You held ${compositeForm.accuracy}% form, above your ${masteryThreshold}% target. Move to the next step or repeat this step?`;
+    const options = isLastStep
+      ? [
+          { label: "Repeat step", value: "repeat step" },
+          { label: "Finish and review", value: "finish and review" }
+        ]
+      : [
+          { label: "Next step", value: "next step" },
+          { label: "Repeat step", value: "repeat step" }
+        ];
+
+    pendingCoachResponseRef.current = {
+      kind: "mastery",
+      stepKey
+    };
+    setCoachEvent({
+      action: "confirm_next",
+      state: "mastery_reached",
+      message,
+      summary: message,
+      speak: true,
+      requires_response: true,
+      feedback_intent: `question:mastery:${stepKey}`,
+      question: { kind: "mastery", options },
+      evidence: {
+        accuracy: compositeForm.accuracy,
+        coverage: compositeForm.coverage,
+        mastery_threshold: masteryThreshold
+      }
+    });
+    if (textEnabled) appendConversation({ role: "ai", text: message });
+  }, [
+    appendConversation,
+    compositeForm,
+    currentStep?.id,
+    currentTechnique?.id,
+    masteryThreshold,
+    requiresResponse,
+    safeStepIndex,
+    steps.length,
+    textEnabled,
+    trainSessionActive
+  ]);
+  const selectMasteryThreshold = useCallback((threshold) => {
+    const nextThreshold = Math.max(70, Math.min(95, Number(threshold) || 80));
+    setMasteryThreshold(nextThreshold);
+    localStorage.setItem("studioMasteryThreshold", String(nextThreshold));
+  }, []);
+
+  useEffect(() => {
     if (steps.length > 0 && currentStepIndex >= steps.length) {
       setCurrentStepIndex(steps.length - 1);
     }
@@ -1033,6 +1132,7 @@ export default function TrainMode({
 
   useEffect(() => {
     const techniqueChanged = lastTechniqueIdRef.current !== currentTechnique?.id;
+    pendingCoachResponseRef.current = null;
     lastTechniqueIdRef.current = currentTechnique?.id;
     lastSpokenMessageRef.current = "";
     lastSpokenIntentRef.current = "";
@@ -1407,6 +1507,8 @@ export default function TrainMode({
           showFullBodyAssessment={isAdminStudio}
           difficulty={formDifficulty}
           onDifficultyChange={selectFormDifficulty}
+          masteryThreshold={masteryThreshold}
+          onMasteryThresholdChange={selectMasteryThreshold}
         />
       </aside>
     </>

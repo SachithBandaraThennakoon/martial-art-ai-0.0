@@ -27,6 +27,7 @@ from services.rate_limits import (
     FORGOT_PASSWORD_IP,
     LOGIN_ACCOUNT,
     LOGIN_IP,
+    GUEST_SESSION_IP,
     REFRESH_IP,
     REFRESH_TOKEN,
     REGISTER_ACCOUNT,
@@ -43,6 +44,7 @@ from utils.security import (
     hash_password,
     verify_password,
 )
+from services.guest_demo import get_or_create_guest
 
 router = APIRouter()
 
@@ -51,6 +53,7 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173").strip().rstrip
 RESET_TOKEN_MINUTES = 30
 RESET_RESPONSE = "If an account matches that email, a password reset link is on its way."
 REFRESH_COOKIE_NAME = "martial_refresh"
+GUEST_COOKIE_NAME = "martial_guest"
 COOKIE_SECURE = APP_ENV == "production"
 COOKIE_SAMESITE = "none" if COOKIE_SECURE else "lax"
 ALLOWED_BROWSER_ORIGINS = {
@@ -120,6 +123,31 @@ def _session_payload(user: User) -> dict:
         "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         **account_payload(user),
     }
+
+
+@router.post("/guest-session")
+def guest_session(request: Request, response: Response, db: Session = Depends(get_db)):
+    """Issue a real, isolated demo account with representative training history."""
+    _require_trusted_browser_origin(request)
+    enforce_rate_limits(db, (GUEST_SESSION_IP, client_ip(request)))
+    user, browser_id = get_or_create_guest(db, request.cookies.get(GUEST_COOKIE_NAME))
+    refresh_token, _session = issue_refresh_session(
+        db,
+        user,
+        user_agent=request.headers.get("user-agent"),
+    )
+    db.commit()
+    _set_refresh_cookie(response, refresh_token)
+    response.set_cookie(
+        key=GUEST_COOKIE_NAME,
+        value=browser_id,
+        max_age=30 * 24 * 60 * 60,
+        httponly=True,
+        secure=COOKIE_SECURE,
+        samesite=COOKIE_SAMESITE,
+        path="/",
+    )
+    return _session_payload(user)
 
 
 @router.post("/register")
@@ -269,6 +297,9 @@ def forgot_password(
         (FORGOT_PASSWORD_ACCOUNT, clean_email),
     )
     response = {"message": RESET_RESPONSE}
+
+    if clean_email.endswith("@guest.xmartialart.invalid"):
+        return response
 
     # Invalid and unknown addresses receive the same response to avoid account enumeration.
     if not _valid_email(clean_email):

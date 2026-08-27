@@ -4,7 +4,7 @@ import { AuthContext } from "../context/auth";
 import { CATEGORY_ORDER, slugify } from "../data/techniqueCatalog";
 
 export default function Navbar() {
-  const { token, authReady, logout, userName, userRole } = useContext(AuthContext);
+  const { token, authReady, isGuest, logout, userName, userRole } = useContext(AuthContext);
   const mainCategories = CATEGORY_ORDER;
   const hasVisibleSession = Boolean(token) || (!authReady && Boolean(userName));
   const location = useLocation();
@@ -57,7 +57,7 @@ export default function Navbar() {
               <span>Workspace</span>
               <NavLink className={studioNavClass} onClick={closeMenu} to="/studio">Studio</NavLink>
               <NavLink className={dashboardNavClass} onClick={closeMenu} to="/dashboard/overview">Dashboard</NavLink>
-              {hasVisibleSession ? <NavLink className={navClass} onClick={closeMenu} to="/account/privacy">Privacy &amp; account</NavLink> : null}
+              {hasVisibleSession && !isGuest ? <NavLink className={navClass} onClick={closeMenu} to="/account/privacy">Privacy &amp; account</NavLink> : null}
               <NavLink className={navClass} onClick={closeMenu} to="/pricing">Plans</NavLink>
               <NavLink className={navClass} onClick={closeMenu} to="/contact">Contact</NavLink>
               {userRole === "admin" ? (

@@ -1,4 +1,4 @@
-import { useContext, useEffect } from "react";
+import { useContext, useEffect, useState } from "react";
 import { Link, useLocation } from "react-router";
 import { DEFAULT_STUDIO_MODE, STUDIO_MODES } from "../data/studioModes";
 import { AuthContext } from "../context/auth";
@@ -10,8 +10,23 @@ export default function StudioModeEntry({
   onSelect,
   techniqueName = ""
 }) {
-  const { token } = useContext(AuthContext);
+  const { loginAsGuest, token } = useContext(AuthContext);
   const location = useLocation();
+  const [guestError, setGuestError] = useState("");
+  const [guestLoading, setGuestLoading] = useState(false);
+
+  const continueAsGuest = async () => {
+    setGuestError("");
+    setGuestLoading(true);
+    try {
+      await loginAsGuest();
+      onSelect(DEFAULT_STUDIO_MODE);
+    } catch (error) {
+      setGuestError(error.message || "Guest mode is temporarily unavailable.");
+    } finally {
+      setGuestLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (!onClose) return undefined;
@@ -91,17 +106,21 @@ export default function StudioModeEntry({
       {!token ? (
         <div className="studio-mode-entry__guest-access">
           <div>
-            <strong>Already have an account?</strong>
-            <span>Sign in to save progress and open personal Analysis.</span>
+            <strong>Try a complete demo or use your account.</strong>
+            <span>Guest mode includes sample history and saves new progress in this browser.</span>
           </div>
           <div className="studio-mode-entry__guest-actions">
-            <Link className="btn btn--light btn--small" state={{ from: location }} to="/login">
+            <button className="btn btn--light btn--small" disabled={guestLoading} onClick={continueAsGuest} type="button">
+              {guestLoading ? "Opening demo…" : "Try guest demo"}
+            </button>
+            <Link className="btn btn--ghost btn--small" state={{ from: location }} to="/login">
               Sign in
             </Link>
             <Link className="btn btn--ghost btn--small" state={{ from: location }} to="/register">
               Create account
             </Link>
           </div>
+          {guestError ? <p className="form-error" role="alert">{guestError}</p> : null}
         </div>
       ) : null}
       <p className="studio-mode-entry__hint">

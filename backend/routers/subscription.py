@@ -23,6 +23,7 @@ from services.billing import (
 )
 from services.paypal_client import PayPalAPIError, get_subscription, verify_webhook_signature
 from services.rate_limits import SUBSCRIPTION_USER, enforce_rate_limits
+from services.guest_demo import is_guest_user
 
 
 router = APIRouter(prefix="/subscription", tags=["Subscription"])
@@ -59,12 +60,21 @@ def _validated_plan(value: str) -> str:
     return plan
 
 
+def _require_billable_account(user: User) -> None:
+    if is_guest_user(user):
+        raise HTTPException(
+            status_code=403,
+            detail="Create an account to purchase or manage a subscription",
+        )
+
+
 @router.post("/checkout-context")
 def create_checkout_context(
     data: CheckoutContextRequest,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    _require_billable_account(user)
     enforce_rate_limits(db, (SUBSCRIPTION_USER, str(user.id)))
     plan = _validated_plan(data.plan)
     return {
@@ -81,6 +91,7 @@ async def activate_subscription(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    _require_billable_account(user)
     enforce_rate_limits(db, (SUBSCRIPTION_USER, str(user.id)))
     plan = _validated_plan(data.plan)
     subscription_id = data.paypal_subscription_id.strip()

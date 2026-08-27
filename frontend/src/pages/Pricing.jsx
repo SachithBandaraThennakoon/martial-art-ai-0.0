@@ -21,7 +21,7 @@ function formatFeature(value) {
 }
 
 export default function Pricing() {
-  const { token, userPlan, refreshProfile } = useContext(AuthContext) || {};
+  const { isGuest, token, userPlan, refreshProfile } = useContext(AuthContext) || {};
   const [activationMessage, setActivationMessage] = useState("");
 
   const createCheckoutContext = useCallback(
@@ -161,6 +161,13 @@ export default function Pricing() {
                     Sign in to pay
                   </Link>
                   <Link className="btn btn--ghost btn--full" to="/register">
+                    Create an account
+                  </Link>
+                </div>
+              ) : isGuest ? (
+                <div className="pricing-login-box">
+                  <p>The guest demo already includes Elite access. Create an account when you are ready to choose a paid plan.</p>
+                  <Link className="btn btn--light btn--full" to="/register">
                     Create an account
                   </Link>
                 </div>

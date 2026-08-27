@@ -106,6 +106,15 @@ class BillingLifecycleTests(unittest.TestCase):
         with self.assertRaises(Exception):
             verify_checkout_reference(payload["custom_id"], self.other_user, "PRO_PLAN")
 
+    def test_guest_account_cannot_start_checkout(self):
+        self.user.email = "demo-browser@guest.xmartialart.invalid"
+        self.db.commit()
+
+        response = self.client.post("/subscription/checkout-context", json={"plan": "PRO_PLAN"})
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("Create an account", response.json()["detail"])
+
     def test_activation_rejects_checkout_reference_for_another_user(self):
         details = self.subscription_details(
             custom_id=issue_checkout_reference(self.other_user, "PRO_PLAN")

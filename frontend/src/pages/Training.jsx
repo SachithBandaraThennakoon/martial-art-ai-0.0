@@ -13,6 +13,11 @@ import {
   unlockVoicePlayback
 } from "../services/browserVoice";
 
+const STUDENT_SKELETON_LAYERS = Object.freeze({
+  level1: false,
+  corrections: true
+});
+
 export default function TrainingStudio({ analysisPreview = false, studioMode = "student" }) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -160,7 +165,7 @@ export default function TrainingStudio({ analysisPreview = false, studioMode = "
 
   const activeSkeletonLayers = isAdminStudio
     ? skeletonLayers
-    : { level1: false, corrections: true };
+    : STUDENT_SKELETON_LAYERS;
 
   return (
     <main

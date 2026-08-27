@@ -7164,6 +7164,29 @@ select:focus {
   background: rgba(96, 211, 148, 0.12);
 }
 
+.mastery-threshold-control {
+  display: grid;
+  grid-template-columns: auto minmax(80px, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-align: left;
+}
+
+.mastery-threshold-control input {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.mastery-threshold-control output {
+  min-width: 34px;
+  color: var(--text);
+  font-weight: 900;
+  text-align: right;
+}
+
 .form-score-groups {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

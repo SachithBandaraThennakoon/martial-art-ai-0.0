@@ -94,6 +94,7 @@ def account_payload(user: User) -> dict:
         "subscription_ends_at": (
             user.subscription_ends_at.isoformat() if user.subscription_ends_at else None
         ),
+        "is_guest": (user.email or "").lower().endswith("@guest.xmartialart.invalid"),
     }
 
 

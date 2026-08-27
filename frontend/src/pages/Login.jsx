@@ -10,7 +10,7 @@ import AuthStory from "../components/AuthStory";
 const LOGIN_TIMEOUT_MS = 30_000;
 
 export default function Login() {
-  const { authReady, login, token } = useContext(AuthContext);
+  const { authReady, login, loginAsGuest, token } = useContext(AuthContext);
   const location = useLocation();
   const navigate = useNavigate();
   const [email, setEmail] = useState(location.state?.email || "");
@@ -66,6 +66,21 @@ export default function Login() {
       );
     } finally {
       window.clearTimeout(timeout);
+      setIsSubmitting(false);
+    }
+  };
+
+  const continueAsGuest = async () => {
+    setError("");
+    setIsSubmitting(true);
+    try {
+      await loginAsGuest();
+      navigate(destination ? `${destination.pathname}${destination.search || ""}` : "/studio", {
+        replace: true
+      });
+    } catch (guestError) {
+      setError(guestError.message || "Guest mode is temporarily unavailable.");
+    } finally {
       setIsSubmitting(false);
     }
   };
@@ -128,6 +143,10 @@ export default function Login() {
 
         <button className="btn btn--light btn--full" disabled={isSubmitting} type="submit">
           {isSubmitting ? "Signing in…" : "Sign in"}
+        </button>
+
+        <button className="btn btn--ghost btn--full" disabled={isSubmitting} onClick={continueAsGuest} type="button">
+          Continue as guest
         </button>
 
         <p className="auth-card__footer">New here? <Link to="/register">Create an account</Link></p>
