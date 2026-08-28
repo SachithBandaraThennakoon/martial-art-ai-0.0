@@ -1040,7 +1040,10 @@ export default function SkeletonCanvas({
     wsRef.current.send(
       JSON.stringify({
         type: command.type || "user_message",
-        message: command.message
+        message: command.message,
+        accuracy: command.accuracy,
+        coverage: command.coverage,
+        mastery_threshold: command.masteryThreshold
       })
     );
     pendingCommandRef.current = null;
@@ -1487,6 +1490,14 @@ export default function SkeletonCanvas({
       const now = performance.now();
 
       if (isDisposed || document.hidden) {
+        animationFrameId = requestAnimationFrame(detect);
+        return;
+      }
+
+      // A coach question owns the turn. Freeze vision inference and temporal
+      // calculations while waiting so CPU/GPU work cannot compete with speech
+      // recognition. Keep the stream attached for an instant resume afterward.
+      if (trackingSessionPausedRef.current) {
         animationFrameId = requestAnimationFrame(detect);
         return;
       }

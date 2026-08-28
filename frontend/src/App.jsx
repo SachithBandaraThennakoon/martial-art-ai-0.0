@@ -1,6 +1,7 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useContext, useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, useLocation } from "react-router";
 import { AuthProvider } from "./context/AuthContext";
+import { AuthContext } from "./context/auth";
 import { CatalogProvider } from "./context/CatalogContext";
 import Navbar from "./components/Navbar";
 import Footer from "./components/Footer";
@@ -28,20 +29,50 @@ const ManualTechniqueCatalogAdmin = lazy(() => import("./pages/ManualTechniqueCa
 
 function TrainingRoute() {
   const location = useLocation();
+  const { authReady, loginAsGuest, token } = useContext(AuthContext);
+  const [guestError, setGuestError] = useState("");
   const searchParams = new URLSearchParams(location.search);
   const mode = searchParams.get("mode");
   const techniqueName = searchParams.get("technique") || "Jab";
   const training = <Training />;
 
-  return mode === "analysis"
-    ? (
+  useEffect(() => {
+    if (!authReady || token || mode === "analysis") return;
+    let active = true;
+    setGuestError("");
+    loginAsGuest().catch((error) => {
+      if (active) setGuestError(error.message || "Guest mode is temporarily unavailable.");
+    });
+    return () => {
+      active = false;
+    };
+  }, [authReady, loginAsGuest, mode, token]);
+
+  if (mode === "analysis") {
+    return (
         <ProtectedRoute
           preview={<AnalyticsSamplePreview techniqueName={techniqueName} variant="analysis" />}
         >
           {training}
         </ProtectedRoute>
-      )
-    : training;
+    );
+  }
+
+  if (!authReady || !token) {
+    return (
+      <main className="route-loader" role={guestError ? "alert" : "status"}>
+        <span className="studio-live-dot" aria-hidden="true" />
+        {guestError ? guestError : "Opening your private guest Studio…"}
+        {guestError ? (
+          <button className="btn btn--light btn--small" onClick={() => loginAsGuest().catch(() => {})} type="button">
+            Try again
+          </button>
+        ) : null}
+      </main>
+    );
+  }
+
+  return training;
 }
 
 function AppRoutes() {

@@ -141,7 +141,7 @@ def get_or_create_guest(db: Session, browser_id: str | None) -> tuple[User, str]
     user = db.query(User).filter(User.email == email).first()
     if not user:
         user = User(
-            name="Guest Demo",
+            name="X",
             email=email,
             password_hash=hash_password(secrets.token_urlsafe(32)),
             role="user",
@@ -155,6 +155,8 @@ def get_or_create_guest(db: Session, browser_id: str | None) -> tuple[User, str]
     else:
         # Keep returning visitors in the complete demo experience while
         # preserving the practice progress they added in this browser.
+        if user.name == "Guest Demo":
+            user.name = "X"
         user.plan = "ELITE_PLAN"
         user.subscription_status = "trial"
         user.trial_ends_at = (_utcnow() + timedelta(days=1)).replace(tzinfo=None)

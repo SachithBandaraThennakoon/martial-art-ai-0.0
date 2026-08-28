@@ -82,6 +82,20 @@ test("concurrent refresh requests share one in-flight rotation", async () => {
 });
 
 
+test("fresh anonymous requests do not probe the refresh endpoint", async () => {
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    calls.push(String(url));
+    return jsonResponse({ detail: "Authentication required" }, 401);
+  };
+
+  const response = await authFetch("http://service.test/protected-resource");
+
+  assert.equal(response.status, 401);
+  assert.deepEqual(calls, ["http://service.test/protected-resource"]);
+});
+
+
 test("access token expiry is read without persisting the token", () => {
   const payload = Buffer.from(JSON.stringify({ exp: 2_000_000_000 }))
     .toString("base64url");

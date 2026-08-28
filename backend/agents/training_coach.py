@@ -92,7 +92,7 @@ class CoachSession:
                 action="complete"
             )
 
-        if self.state == "confirm_step_complete" and intent == "repeat_step":
+        if self.state == "confirm_step_complete" and intent in {"repeat_step", "repeat"}:
             self.is_ready = True
             self.is_paused = False
             self._clear_pending_question()
@@ -437,6 +437,46 @@ class CoachSession:
             action="session_complete_prompt"
         )
 
+    def mastery_event(self, accuracy, threshold=80, coverage=100):
+        """Turn a sustained client-side form score into a coach-owned question."""
+        def bounded_number(value, default, minimum, maximum):
+            try:
+                number = int(round(float(value)))
+            except (TypeError, ValueError, OverflowError):
+                number = default
+            return max(minimum, min(maximum, number))
+
+        safe_accuracy = bounded_number(accuracy, 0, 0, 100)
+        safe_threshold = bounded_number(threshold, 80, 70, 95)
+        safe_coverage = bounded_number(coverage, 0, 0, 100)
+
+        if self.pending_question:
+            return self._waiting_for_answer_event(
+                accuracy=safe_accuracy,
+                issue="mastery_waiting",
+            )
+        if not self.is_ready or self.is_paused:
+            return self.panel_event(
+                "Finish the current coach prompt first.",
+                accuracy=safe_accuracy,
+                action="waiting",
+                speak=False,
+            )
+        if safe_coverage < 50 or safe_accuracy < safe_threshold:
+            return self.panel_event(
+                "Keep the full movement visible while I verify the step.",
+                accuracy=safe_accuracy,
+                action="observe",
+                speak=False,
+            )
+
+        self.last_accuracy = safe_accuracy
+        return self._complete_step_event(
+            self.current_step_key or self.current_step_name,
+            safe_accuracy,
+            [],
+        )
+
     def intelligence_context_event(self, packet):
         if not isinstance(packet, dict):
             return None
@@ -529,7 +569,7 @@ class CoachSession:
         )
 
     def initial_greeting(self):
-        name_prefix = f"Hello {self.student_name}. " if self.student_name else ""
+        name_prefix = f"Hi {self.student_name}, welcome back. " if self.student_name else "Welcome. "
         self.is_ready = False
         self.is_paused = True
         self.readiness_prompted = True
@@ -824,7 +864,7 @@ class CoachSession:
             suffix = " This is your repeated pattern." if repeated else ""
             return f"{pacing}fix your {body_part}: {issue}.{suffix}"
         if situation_state == "advance_ready" or next_action.get("allow_next_step"):
-            return "Good control. Hold it steady, then move to the next step."
+            return "Good control. Keep it steady while I confirm this step."
         if situation_state == "encouraging":
             return "Good correction. Keep the same rhythm."
         return "Observing your movement."
@@ -844,7 +884,10 @@ class CoachSession:
     def _coach_action_from_intelligence(self, situation_state, next_action):
         command = next_action.get("command")
         if command in {"advance_step", "unlock_next_technique"}:
-            return "advance_step"
+            # Situation awareness is advisory. It may identify that the student
+            # looks ready, but only mastery_event() may open the next-step
+            # question and only an explicit user response may advance the UI.
+            return "observe"
         if command == "fix_tracking":
             return "ask_focus"
         if command == "slow_down":

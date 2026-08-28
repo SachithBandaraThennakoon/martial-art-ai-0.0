@@ -74,7 +74,6 @@ const VOICE_INTERRUPT_ACTIONS = new Set([
   "switch_practice",
   "ask_ready",
   "confirm_start",
-  "confirm_next",
   "repeat_step",
   "step_transition"
 ]);
@@ -171,6 +170,7 @@ export default function TrainMode({
   const [voiceWords, setVoiceWords] = useState([]);
   const [activeVoiceWord, setActiveVoiceWord] = useState(-1);
   const recognitionRef = useRef(null);
+  const responseInputRef = useRef(null);
   const shouldListenRef = useRef(true);
   const listeningRef = useRef(false);
   const restartListenTimerRef = useRef(null);
@@ -719,14 +719,18 @@ export default function TrainMode({
     recognitionRef.current = recognition;
     recognition.lang = "en-US";
     recognition.interimResults = true;
-    recognition.maxAlternatives = 1;
+    recognition.maxAlternatives = 3;
 
     let finalTranscript = "";
 
     recognition.onstart = () => {
       listeningRef.current = true;
       setIsListening(true);
-      setVoiceInputStatus("Listening. Say ready, next, wait, practice, or start again.");
+      setVoiceInputStatus(
+        requiresResponse
+          ? "Your turn. Say one of the reply choices or type below."
+          : "Listening. Say ready, next, wait, practice, or start again."
+      );
     };
     recognition.onend = () => {
       listeningRef.current = false;
@@ -787,7 +791,7 @@ export default function TrainMode({
       setIsListening(false);
       setVoiceInputStatus("Voice input could not start. Tap listen again.");
     }
-  }, [handsFreeEnabled, sendCoachMessage, voiceState]);
+  }, [handsFreeEnabled, requiresResponse, sendCoachMessage, voiceState]);
 
   const getNaturalVoiceKey = useCallback((message) => {
     const profile = VOICE_PROFILES[voiceProfile];
@@ -1012,6 +1016,24 @@ export default function TrainMode({
     startVoiceInput(false);
   }, [handsFreeEnabled, startVoiceInput, stopVoiceInput, voiceState]);
 
+  useEffect(() => {
+    if (!requiresResponse) return undefined;
+
+    const focusTimer = window.setTimeout(() => {
+      responseInputRef.current?.focus({ preventScroll: true });
+    }, 80);
+
+    setVoiceInputStatus(
+      voiceState === "speaking" || voiceState === "loading"
+        ? "Your turn is next. Listening starts when the coach finishes."
+        : handsFreeEnabled
+          ? "Your turn. Listening for your answer."
+          : "Your turn. Type an answer or tap the microphone."
+    );
+
+    return () => window.clearTimeout(focusTimer);
+  }, [handsFreeEnabled, requiresResponse, voiceState]);
+
   useEffect(() => () => {
     shouldListenRef.current = false;
     listeningRef.current = false;
@@ -1072,50 +1094,24 @@ export default function TrainMode({
     if (now - masteryState.firstSeenAt < MASTERY_HOLD_MS) return;
 
     masteryState.prompted = true;
-    const isLastStep = safeStepIndex >= steps.length - 1;
-    const message = isLastStep
-      ? `You held ${compositeForm.accuracy}% form. Repeat this final step, or finish and review?`
-      : `You held ${compositeForm.accuracy}% form, above your ${masteryThreshold}% target. Move to the next step or repeat this step?`;
-    const options = isLastStep
-      ? [
-          { label: "Repeat step", value: "repeat step" },
-          { label: "Finish and review", value: "finish and review" }
-        ]
-      : [
-          { label: "Next step", value: "next step" },
-          { label: "Repeat step", value: "repeat step" }
-        ];
-
     pendingCoachResponseRef.current = {
       kind: "mastery",
       stepKey
     };
-    setCoachEvent({
-      action: "confirm_next",
-      state: "mastery_reached",
-      message,
-      summary: message,
-      speak: true,
-      requires_response: true,
-      feedback_intent: `question:mastery:${stepKey}`,
-      question: { kind: "mastery", options },
-      evidence: {
-        accuracy: compositeForm.accuracy,
-        coverage: compositeForm.coverage,
-        mastery_threshold: masteryThreshold
-      }
+    setCoachCommand({
+      id: `mastery-${stepKey}-${Date.now()}`,
+      type: "mastery_reached",
+      accuracy: compositeForm.accuracy,
+      coverage: compositeForm.coverage,
+      masteryThreshold
     });
-    if (textEnabled) appendConversation({ role: "ai", text: message });
   }, [
-    appendConversation,
     compositeForm,
     currentStep?.id,
     currentTechnique?.id,
     masteryThreshold,
     requiresResponse,
     safeStepIndex,
-    steps.length,
-    textEnabled,
     trainSessionActive
   ]);
   const selectMasteryThreshold = useCallback((threshold) => {
@@ -1380,14 +1376,27 @@ export default function TrainMode({
         </div>
       </div>
 
-      <aside className="conversation-crate" aria-label="Talk to coach">
+      <aside
+        className={`conversation-crate ${requiresResponse ? "conversation-crate--awaiting-response" : ""}`}
+        aria-label="Talk to coach"
+      >
         <div className="conversation-crate__header">
           <div>
             <p className="eyebrow">Student Reply</p>
-            <strong>
+            <strong id="coach-response-status">
               {isListening ? "Listening" : voiceInputStatus}
             </strong>
           </div>
+          {requiresResponse && !isListening ? (
+            <button
+              className="conversation-listen"
+              disabled={voiceState === "speaking" || voiceState === "loading"}
+              onClick={() => startVoiceInput(true)}
+              type="button"
+            >
+              {voiceState === "speaking" || voiceState === "loading" ? "Coach speaking" : "Use microphone"}
+            </button>
+          ) : null}
           {conversation.length > 2 ? (
             <button
               aria-expanded={showConversationHistory}
@@ -1441,8 +1450,10 @@ export default function TrainMode({
           >
             <input
               aria-label="Talk to coach"
+              aria-describedby={requiresResponse ? "coach-response-status" : undefined}
               onChange={(event) => setCoachInput(event.target.value)}
-              placeholder="Answer the master..."
+              placeholder={requiresResponse ? "Your answer..." : "Answer the master..."}
+              ref={responseInputRef}
               value={coachInput}
             />
             <button type="submit">Send</button>

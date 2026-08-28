@@ -3,6 +3,40 @@ import { API_BASE_URL } from "./api.js";
 let accessToken = null;
 let refreshPromise = null;
 const tokenListeners = new Set();
+const SESSION_HINT_KEY = "martial_art_ai_session_available";
+
+function safeLocalStorage() {
+  try {
+    return globalThis.localStorage || null;
+  } catch {
+    return null;
+  }
+}
+
+export function hasRefreshSessionHint() {
+  if (accessToken) return true;
+  const storage = safeLocalStorage();
+  if (!storage) return false;
+  try {
+    return storage.getItem(SESSION_HINT_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function updateSessionHint(hasSession) {
+  const storage = safeLocalStorage();
+  if (!storage) return;
+  try {
+    if (hasSession) {
+      storage.setItem(SESSION_HINT_KEY, "true");
+    } else {
+      storage.removeItem(SESSION_HINT_KEY);
+    }
+  } catch {
+    // Authentication still works in memory when browser storage is disabled.
+  }
+}
 
 export function getAccessToken() {
   return accessToken;
@@ -10,6 +44,7 @@ export function getAccessToken() {
 
 export function setAccessToken(token) {
   accessToken = token || null;
+  updateSessionHint(Boolean(accessToken));
   tokenListeners.forEach((listener) => listener(accessToken));
 }
 
@@ -53,7 +88,7 @@ export async function refreshAccessToken() {
 
 export async function authFetch(input, options = {}) {
   let token = getAccessToken();
-  if (!token) {
+  if (!token && hasRefreshSessionHint()) {
     const session = await refreshAccessToken();
     token = session?.access_token || null;
   }
@@ -70,6 +105,7 @@ export async function authFetch(input, options = {}) {
 
   let response = await request(token);
   if (response.status !== 401) return response;
+  if (!hasRefreshSessionHint()) return response;
 
   const session = await refreshAccessToken();
   if (!session?.access_token) return response;

@@ -39,7 +39,7 @@ class GuestSessionTests(unittest.TestCase):
         payload = response.json()
         self.assertTrue(payload["access_token"])
         self.assertTrue(payload["is_guest"])
-        self.assertEqual(payload["name"], "Guest Demo")
+        self.assertEqual(payload["name"], "X")
         self.assertEqual(payload["role"], "user")
         self.assertEqual(payload["plan"], "ELITE_PLAN")
         self.assertTrue(self.client.cookies.get(REFRESH_COOKIE_NAME))

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AuthContext } from "./auth";
 import { API_BASE_URL } from "../services/api";
 import {
@@ -6,6 +6,7 @@ import {
   authFetch,
   endSession,
   getAccessToken,
+  hasRefreshSessionHint,
   refreshAccessToken,
   setAccessToken,
   subscribeAccessToken
@@ -15,7 +16,7 @@ export function AuthProvider({ children }) {
   const [token, setTokenState] = useState(() => {
     const legacyToken = localStorage.getItem("token");
     localStorage.removeItem("token");
-    setAccessToken(legacyToken);
+    if (legacyToken) setAccessToken(legacyToken);
     return legacyToken;
   });
   const [userPlan, setUserPlan] = useState("FREE_PLAN");
@@ -24,6 +25,7 @@ export function AuthProvider({ children }) {
   const [subscriptionStatus, setSubscriptionStatus] = useState("inactive");
   const [isGuest, setIsGuest] = useState(false);
   const [authReady, setAuthReady] = useState(false);
+  const guestLoginPromiseRef = useRef(null);
 
   const applyProfile = useCallback((profile = {}) => {
     setUserPlan(profile.plan || "FREE_PLAN");
@@ -44,16 +46,23 @@ export function AuthProvider({ children }) {
   }, [applyProfile]);
 
   const loginAsGuest = useCallback(async () => {
-    const response = await fetch(`${API_BASE_URL}/guest-session`, {
-      method: "POST",
-      credentials: "include"
-    });
-    const session = await response.json().catch(() => ({}));
-    if (!response.ok || !session.access_token) {
-      throw new Error(session.detail || "Guest mode is temporarily unavailable.");
+    if (!guestLoginPromiseRef.current) {
+      guestLoginPromiseRef.current = (async () => {
+        const response = await fetch(`${API_BASE_URL}/guest-session`, {
+          method: "POST",
+          credentials: "include"
+        });
+        const session = await response.json().catch(() => ({}));
+        if (!response.ok || !session.access_token) {
+          throw new Error(session.detail || "Guest mode is temporarily unavailable.");
+        }
+        login(session.access_token, session.plan || "FREE_PLAN", session);
+        return session;
+      })().finally(() => {
+        guestLoginPromiseRef.current = null;
+      });
     }
-    login(session.access_token, session.plan || "FREE_PLAN", session);
-    return session;
+    return guestLoginPromiseRef.current;
   }, [login]);
 
   const logout = useCallback(() => {
@@ -91,7 +100,9 @@ export function AuthProvider({ children }) {
     const validateSession = async () => {
       try {
         let session = null;
-        if (!getAccessToken()) session = await refreshAccessToken();
+        if (!getAccessToken() && hasRefreshSessionHint()) {
+          session = await refreshAccessToken();
+        }
         if (session) applyProfile(session);
         if (!getAccessToken()) {
           applyProfile();

@@ -82,6 +82,13 @@ class CoachConversationFlowTests(unittest.TestCase):
         self.assertTrue(coach.is_paused)
         self.assertEqual(coach.user_message("yes")["action"], "observe")
 
+    def test_greeting_uses_the_authenticated_student_name(self):
+        coach = CoachSession(student_name="X")
+
+        message = coach.initial_greeting()
+
+        self.assertTrue(message.startswith("Hi X, welcome back."))
+
     def test_ready_question_is_one_semantic_feedback_until_reminder(self):
         coach = CoachSession(current_step_name="Guard stance", total_steps=2)
         greeting = coach.panel_event(coach.initial_greeting(), action="confirm_start")
@@ -112,6 +119,33 @@ class CoachConversationFlowTests(unittest.TestCase):
         coach.initial_greeting()
         self.assertIsNone(coach.intelligence_context_event({"situation_awareness": {}}))
 
+    def test_session_awareness_cannot_advance_without_user_confirmation(self):
+        coach = CoachSession(
+            current_step_key="guard",
+            current_step_name="Guard stance",
+            current_step_index=0,
+            total_steps=2,
+            is_ready=True,
+            is_paused=False,
+            state="observe_pose",
+        )
+
+        event = coach.intelligence_context_event({
+            "current_step": {"id": "guard", "name": "Guard stance"},
+            "situation_awareness": {
+                "situation_state": "advance_ready",
+                "feedback_decision": {"should_speak": True},
+                "next_action": {"command": "advance_step", "allow_next_step": True},
+                "reasoning": {"decision_score": 0.9},
+            },
+            "temporal_layers": {"level3_session": {"mastery_score": 0.9}},
+        })
+
+        self.assertEqual(event["action"], "observe")
+        self.assertNotIn("next_step_index", event)
+        self.assertEqual(coach.current_step_index, 0)
+        self.assertIsNone(coach.pending_question)
+
     def test_step_completion_waits_for_user(self):
         coach = CoachSession(
             current_step_key="guard",
@@ -128,6 +162,35 @@ class CoachConversationFlowTests(unittest.TestCase):
         next_event = coach.user_message("next step")
         self.assertEqual(next_event["action"], "advance_step")
         self.assertEqual(next_event["next_step_index"], 1)
+
+    def test_configurable_mastery_uses_the_same_pending_question_flow(self):
+        coach = CoachSession(
+            current_step_key="guard",
+            current_step_name="Guard stance",
+            current_step_index=0,
+            total_steps=2,
+            is_ready=True,
+            is_paused=False,
+            state="observe_pose",
+        )
+
+        event = coach.mastery_event(84, threshold=80, coverage=72)
+
+        self.assertEqual(event["action"], "confirm_next")
+        self.assertEqual(event["question"]["kind"], "next_step")
+        self.assertTrue(event["requires_response"])
+        waiting = coach.movement_event("guard", "Guard stance", [], {})
+        self.assertEqual(waiting["action"], "waiting")
+        self.assertFalse(waiting["speak"])
+        self.assertEqual(coach.user_message("repeat step")["action"], "repeat_step")
+
+    def test_mastery_rejects_low_coverage_without_pausing_the_coach(self):
+        coach = CoachSession(state="observe_pose", is_ready=True, is_paused=False)
+
+        event = coach.mastery_event(90, threshold=80, coverage=40)
+
+        self.assertEqual(event["action"], "observe")
+        self.assertFalse(event["requires_response"])
 
     def test_user_can_repeat_instead_of_advancing(self):
         coach = CoachSession(
