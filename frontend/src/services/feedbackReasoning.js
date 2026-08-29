@@ -37,6 +37,22 @@ export function repeatsPendingQuestion(event, previousIntent) {
   return Boolean(event?.requires_response && intent === previousIntent);
 }
 
+export function getCoachGuidanceCooldownKey(event) {
+  const action = String(event?.action || "").toLowerCase();
+  const issue = String(event?.issue || "").toLowerCase();
+  if (action === "fatigue_warning" || issue === "fatigue_risk") return "fatigue";
+  return null;
+}
+
+export function getStableCorrectionTarget(situation) {
+  const state = situation?.stable_state || situation?.situation_state;
+  if (state !== "correcting") return undefined;
+
+  const bodyPart = situation?.attention_target?.body_part || null;
+  if (!bodyPart || ["whole_body", "whole_form", "camera"].includes(bodyPart)) return null;
+  return bodyPart;
+}
+
 export function buildPracticeSetMessage({ gapMs, reps, started = false, stepName = "the first step" }) {
   const gapSeconds = Number(gapMs) / 1000;
   const gapLabel = Number.isInteger(gapSeconds) ? String(gapSeconds) : gapSeconds.toFixed(1);

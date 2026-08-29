@@ -87,7 +87,9 @@ class CoachConversationFlowTests(unittest.TestCase):
 
         message = coach.initial_greeting()
 
-        self.assertTrue(message.startswith("Hi X, welcome back."))
+        self.assertTrue(message.startswith("Hi X."))
+        self.assertEqual(message, "Hi X. Ready to begin?")
+        self.assertNotIn("welcome back", message.lower())
 
     def test_ready_question_is_one_semantic_feedback_until_reminder(self):
         coach = CoachSession(current_step_name="Guard stance", total_steps=2)
@@ -177,6 +179,7 @@ class CoachConversationFlowTests(unittest.TestCase):
         event = coach.mastery_event(84, threshold=80, coverage=72)
 
         self.assertEqual(event["action"], "confirm_next")
+        self.assertEqual(event["message"], "Next step or repeat?")
         self.assertEqual(event["question"]["kind"], "next_step")
         self.assertTrue(event["requires_response"])
         waiting = coach.movement_event("guard", "Guard stance", [], {})
@@ -192,6 +195,29 @@ class CoachConversationFlowTests(unittest.TestCase):
         self.assertEqual(event["action"], "observe")
         self.assertFalse(event["requires_response"])
 
+    def test_angle_only_perfection_does_not_start_a_competing_hold_countdown(self):
+        coach = CoachSession(
+            current_step_key="guard",
+            current_step_name="Guard stance",
+            current_step_index=0,
+            total_steps=2,
+            is_ready=True,
+            is_paused=False,
+            state="observe_pose",
+        )
+
+        event = coach.movement_event(
+            "guard",
+            "Guard stance",
+            [{"body_part": "elbow_left", "min": 70, "max": 105}],
+            {"elbow_left": 90},
+        )
+
+        self.assertEqual(event["message"], "Tracking your form.")
+        self.assertEqual(event["issue"], "observing")
+        self.assertFalse(event["speak"])
+        self.assertFalse(event["requires_response"])
+
     def test_user_can_repeat_instead_of_advancing(self):
         coach = CoachSession(
             current_step_name="Guard stance",
@@ -203,6 +229,67 @@ class CoachConversationFlowTests(unittest.TestCase):
         event = coach.user_message("no")
         self.assertEqual(event["action"], "repeat_step")
         self.assertFalse(event["requires_response"])
+
+    def test_unified_session_history_orders_feedback_question_and_user_reply(self):
+        coach = CoachSession(
+            current_step_key="guard",
+            current_step_name="Guard stance",
+            current_step_index=0,
+            total_steps=2,
+            is_ready=True,
+            is_paused=False,
+        )
+        coach.feedback_observed_event(
+            "Raise your left guard.",
+            body_part="hand_left",
+            issue="low",
+            accuracy=72,
+            coverage=90,
+        )
+        question = coach._complete_step_event("guard", 84, [])
+        coach.user_message("repeat step")
+
+        self.assertEqual(question["memory"]["turn_state"], "awaiting_user")
+        sources = [entry["source"] for entry in coach.session_history]
+        self.assertEqual(sources[:3], ["system_feedback", "coach", "user"])
+        self.assertEqual(coach.session_history[0]["evidence"]["accuracy"], 72)
+
+    def test_session_history_is_bounded_and_compacts_duplicate_events(self):
+        coach = CoachSession()
+        for index in range(30):
+            coach.feedback_observed_event(f"Feedback {index}")
+
+        self.assertEqual(len(coach.session_history), 24)
+        coach.feedback_observed_event("Feedback 29")
+        self.assertEqual(len(coach.session_history), 24)
+        self.assertEqual(coach.session_history[-1]["occurrences"], 2)
+
+    def test_stable_return_asks_to_continue_without_welcome_back(self):
+        coach = CoachSession(
+            current_step_key="guard",
+            current_step_name="Guard stance",
+            current_step_index=0,
+            total_steps=2,
+            is_ready=True,
+            is_paused=False,
+        )
+        event = coach.intelligence_context_event({
+            "current_step": {"id": "guard", "name": "Guard stance"},
+            "situation_awareness": {
+                "situation_state": "resume_ready",
+                "feedback_decision": {"should_speak": True},
+                "next_action": {"command": "confirm_resume", "allow_next_step": False},
+                "reasoning": {"decision_score": 0.8},
+            },
+            "temporal_layers": {"level3_session": {"mastery_score": 0.55}},
+        })
+
+        self.assertEqual(event["action"], "ask_resume")
+        self.assertEqual(event["question"]["kind"], "resume")
+        self.assertNotIn("welcome back", event["message"].lower())
+        continued = coach.user_message("yes")
+        self.assertEqual(continued["action"], "observe")
+        self.assertFalse(continued["requires_response"])
 
     def test_completed_session_offers_clear_choices(self):
         coach = CoachSession(current_step_index=1, total_steps=2)

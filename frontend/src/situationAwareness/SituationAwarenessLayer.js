@@ -1,9 +1,14 @@
+import { StableSituationResolver } from "./StableSituationResolver.js";
+
 const DEFAULT_CONFIG = {
   updateIntervalMs: 450,
   lowTrackingThreshold: 0.45,
   mistakeRiskThreshold: 0.62,
   fatigueRiskThreshold: 0.62,
-  forecastRiskThreshold: 0.62
+  forecastRiskThreshold: 0.62,
+  attentionHoldMs: 2000,
+  distractionMs: 5000,
+  returnStableMs: 1000
 };
 
 function clamp(value, min, max) {
@@ -28,6 +33,15 @@ function sameMistake(mistake, weakness) {
   );
 }
 
+function trackingIsUnclear(trackingConfidence, action, config) {
+  const motionPhase = action.temporal_segmentation?.motion_phase;
+  return (
+    trackingConfidence < config.lowTrackingThreshold ||
+    motionPhase === "tracking_lost" ||
+    action.tracking_lost === true
+  );
+}
+
 function getAttentionTarget({ trackingConfidence, action, session, user, weaknessMatch, config }) {
   const forecast = action.forecast_awareness || {};
   const forecastWarning =
@@ -35,7 +49,7 @@ function getAttentionTarget({ trackingConfidence, action, session, user, weaknes
     forecast.likely_mistake &&
     (forecast.risk || 0) >= config.forecastRiskThreshold;
 
-  if (trackingConfidence < config.lowTrackingThreshold) {
+  if (trackingIsUnclear(trackingConfidence, action, config)) {
     return {
       layer: "level1",
       body_part: "camera",
@@ -102,9 +116,10 @@ function getAttentionTarget({ trackingConfidence, action, session, user, weaknes
   };
 }
 
-function getSituationState({ trackingConfidence, action, session, userProgression, config }) {
+function getSituationState({ trackingConfidence, action, session, userProgression, engagement, config }) {
   const forecast = action.forecast_awareness || {};
-  if (trackingConfidence < config.lowTrackingThreshold) return "tracking_unclear";
+  if (engagement.state !== "engaged") return engagement.state;
+  if (trackingIsUnclear(trackingConfidence, action, config)) return "tracking_unclear";
   if ((action.mistake_risk || 0) >= config.mistakeRiskThreshold) return "correcting";
   if (
     forecast.trusted &&
@@ -126,6 +141,30 @@ function getSituationState({ trackingConfidence, action, session, userProgressio
 function getFeedbackDecision({ situationState, attentionTarget, session, user }) {
   const intensity = user.personalization?.coaching_intensity || "medium";
 
+  if (["attention_hold", "attention_paused", "returning"].includes(situationState)) {
+    return {
+      type: "engagement_hold",
+      timing: "none",
+      intensity: "low",
+      message: "",
+      should_speak: false,
+      should_show_text: false,
+      should_pause_progression: true
+    };
+  }
+
+  if (situationState === "resume_ready") {
+    return {
+      type: "resume_check",
+      timing: "after_tracking_stabilizes",
+      intensity: "low",
+      message: "Ready to continue?",
+      should_speak: true,
+      should_show_text: true,
+      should_pause_progression: true
+    };
+  }
+
   if (situationState === "tracking_unclear") {
     return {
       type: "tracking_prompt",
@@ -143,7 +182,7 @@ function getFeedbackDecision({ situationState, attentionTarget, session, user })
       type: "fatigue_warning",
       timing: "immediate",
       intensity: "medium",
-      message: "Form quality is dropping. Slow down and reset before continuing.",
+      message: "Slow down. Reset your stance.",
       should_speak: true,
       should_show_text: true,
       should_pause_progression: true
@@ -188,11 +227,11 @@ function getFeedbackDecision({ situationState, attentionTarget, session, user })
 
   if (situationState === "advance_ready") {
     return {
-      type: "advance",
+      type: "mastery_candidate",
       timing: "after_current_rep",
       intensity: "low",
-      message: "Good consistency. You are ready to advance.",
-      should_speak: true,
+      message: "Good consistency. Keep this shape while I confirm the step.",
+      should_speak: false,
       should_show_text: true,
       should_pause_progression: false
     };
@@ -222,6 +261,23 @@ function getFeedbackDecision({ situationState, attentionTarget, session, user })
 }
 
 function getNextAction({ situationState, attentionTarget, userProgression }) {
+  if (["attention_hold", "attention_paused", "returning"].includes(situationState)) {
+    return {
+      command: "wait_for_return",
+      step_focus: "session_attention",
+      allow_next_step: false,
+      agent_intent: "suppress_feedback"
+    };
+  }
+
+  if (situationState === "resume_ready") {
+    return {
+      command: "confirm_resume",
+      step_focus: "current_step",
+      allow_next_step: false,
+      agent_intent: "ask_user_to_resume"
+    };
+  }
   if (situationState === "tracking_unclear") {
     return {
       command: "fix_tracking",
@@ -260,10 +316,12 @@ function getNextAction({ situationState, attentionTarget, userProgression }) {
 
   if (situationState === "advance_ready") {
     return {
-      command: userProgression.ready_for_next_technique ? "unlock_next_technique" : "advance_step",
-      step_focus: "next_progression",
-      allow_next_step: true,
-      agent_intent: "advance_training_plan"
+      command: "verify_mastery",
+      step_focus: userProgression.ready_for_next_technique
+        ? "next_technique_candidate"
+        : "current_step_mastery",
+      allow_next_step: false,
+      agent_intent: "wait_for_composite_mastery_gate"
     };
   }
 
@@ -280,6 +338,42 @@ export class SituationAwarenessLayer {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.lastUpdateMs = 0;
     this.latestState = null;
+    this.lowTrackingSinceMs = 0;
+    this.returnStableSinceMs = 0;
+    this.wasDistracted = false;
+    this.stableResolver = new StableSituationResolver(config.stability || {});
+  }
+
+  getEngagementState(trackingConfidence, timestampMs) {
+    const trackingLow = trackingConfidence < this.config.lowTrackingThreshold;
+    if (trackingLow) {
+      this.returnStableSinceMs = 0;
+      if (!this.lowTrackingSinceMs) this.lowTrackingSinceMs = timestampMs;
+      const interruptedForMs = timestampMs - this.lowTrackingSinceMs;
+      if (interruptedForMs >= this.config.distractionMs) {
+        this.wasDistracted = true;
+        return { state: "attention_paused", interrupted_for_ms: interruptedForMs };
+      }
+      if (interruptedForMs >= this.config.attentionHoldMs) {
+        return { state: "attention_hold", interrupted_for_ms: interruptedForMs };
+      }
+      return { state: "engaged", interrupted_for_ms: interruptedForMs };
+    }
+
+    this.lowTrackingSinceMs = 0;
+    if (!this.wasDistracted) {
+      return { state: "engaged", interrupted_for_ms: 0 };
+    }
+
+    if (!this.returnStableSinceMs) this.returnStableSinceMs = timestampMs;
+    const stableForMs = timestampMs - this.returnStableSinceMs;
+    if (stableForMs < this.config.returnStableMs) {
+      return { state: "returning", stable_for_ms: stableForMs };
+    }
+
+    this.wasDistracted = false;
+    this.returnStableSinceMs = 0;
+    return { state: "resume_ready", stable_for_ms: stableForMs };
   }
 
   update({ level1State, level2State, level3State, level4State, mode = "train" }) {
@@ -296,6 +390,7 @@ export class SituationAwarenessLayer {
     this.lastUpdateMs = timestampMs;
 
     const trackingConfidence = level1State.tracking?.confidence || 0;
+    const engagement = this.getEngagementState(trackingConfidence, timestampMs);
     const forecast = action.forecast_awareness || {};
     const userProgression = user.progression || {};
     const weaknessMatch = sameMistake(action.likely_mistake, user.top_weakness);
@@ -307,16 +402,31 @@ export class SituationAwarenessLayer {
       weaknessMatch,
       config: this.config
     });
-    const situationState = getSituationState({
+    const rawSituationState = getSituationState({
       trackingConfidence,
       action,
       session,
       userProgression,
+      engagement,
       config: this.config
     });
+    const stability = this.stableResolver.resolve({
+      rawState: rawSituationState,
+      attentionTarget,
+      timestampMs,
+      contextKey: `${action.technique_name || "technique"}:${action.current_step_id || action.current_step_name || "step"}`,
+      evidence: {
+        mistakeRisk: action.mistake_risk || 0,
+        forecastRisk: forecast.risk || 0,
+        fatigueRisk: session.fatigue_risk || 0,
+        masteryScore: session.mastery_score || 0
+      }
+    });
+    const situationState = stability.stable_state;
+    const stableAttentionTarget = stability.stable_target || attentionTarget;
     const feedbackDecision = getFeedbackDecision({
       situationState,
-      attentionTarget,
+      attentionTarget: stableAttentionTarget,
       session,
       user
     });
@@ -332,7 +442,7 @@ export class SituationAwarenessLayer {
     );
     const nextAction = getNextAction({
       situationState,
-      attentionTarget,
+      attentionTarget: stableAttentionTarget,
       userProgression
     });
 
@@ -341,7 +451,11 @@ export class SituationAwarenessLayer {
       situation_context: {
         mode,
         situation_state: situationState,
-        attention_target: attentionTarget,
+        raw_state: rawSituationState,
+        stable_state: situationState,
+        state_confidence: stability.state_confidence,
+        stability,
+        attention_target: stableAttentionTarget,
         feedback_decision: feedbackDecision,
         reasoning: {
           motion_confidence: round(trackingConfidence),
@@ -352,14 +466,17 @@ export class SituationAwarenessLayer {
           forecast_horizon_ms: forecast.horizon_ms ?? null,
           forecast_agreement_error: forecast.agreement_error ?? null,
           user_history_match: Boolean(weaknessMatch),
+          engagement_state: engagement.state,
+          interrupted_for_ms: engagement.interrupted_for_ms || 0,
+          return_stable_for_ms: engagement.stable_for_ms || 0,
           decision_score: round(decisionScore)
         },
         next_action: nextAction,
         agent_context: {
           state: situationState,
-          priority: round(Math.max(decisionScore, attentionTarget.priority || 0)),
-          target: attentionTarget.body_part,
-          issue: attentionTarget.issue,
+          priority: round(Math.max(decisionScore, stableAttentionTarget.priority || 0)),
+          target: stableAttentionTarget.body_part,
+          issue: stableAttentionTarget.issue,
           action: nextAction.command,
           message: feedbackDecision.message
         }
@@ -370,7 +487,8 @@ export class SituationAwarenessLayer {
           level2: Boolean(action),
           level3: Boolean(session),
           level4: Boolean(user)
-        }
+        },
+        engagement
       }
     };
 

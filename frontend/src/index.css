@@ -7187,6 +7187,55 @@ select:focus {
   text-align: right;
 }
 
+.diagnostic-trace-controls {
+  border-color: rgba(72, 204, 143, 0.32);
+  background: linear-gradient(145deg, rgba(17, 34, 29, 0.94), rgba(10, 14, 18, 0.96));
+}
+
+.diagnostic-trace-controls .panel-heading > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.diagnostic-trace-controls .panel-heading strong {
+  font-size: 0.78rem;
+}
+
+.diagnostic-trace-controls__copy {
+  margin: 0.65rem 0;
+  color: var(--muted);
+  font-size: 0.68rem;
+  line-height: 1.45;
+}
+
+.diagnostic-trace-controls__actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.45rem;
+}
+
+.diagnostic-trace-controls__actions button {
+  min-height: 2rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0.45rem;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.68rem;
+  cursor: pointer;
+}
+
+.diagnostic-trace-controls__actions button:first-child {
+  grid-column: 1 / -1;
+  border-color: rgba(72, 204, 143, 0.5);
+  color: #9af0c3;
+}
+
+.diagnostic-trace-controls__actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
 .form-score-groups {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

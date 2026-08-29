@@ -6,6 +6,7 @@ const DEFAULT_CONFIG = {
   minSamplesForDecision: 6,
   readyThreshold: 0.72,
   fatigueRiskThreshold: 0.62,
+  minimumTrackingConfidence: 0.6,
   repeatedMistakeMinCount: 3
 };
 
@@ -170,6 +171,28 @@ export class Level3SessionLayer {
       trackingConfidence: level1State.tracking?.confidence,
       techniqueName: techniqueName || action.technique_name
     });
+    const motionPhase = action.temporal_segmentation?.motion_phase;
+    const trackingConfidence = level1State.tracking?.confidence || 0;
+    const trackingReliable =
+      trackingConfidence >= this.config.minimumTrackingConfidence &&
+      motionPhase !== "tracking_lost";
+    if (!trackingReliable) {
+      if (!this.latestState) return null;
+      return {
+        ...this.latestState,
+        timestamp: level1State.timestamp,
+        session_context: {
+          ...this.latestState.session_context,
+          temporal_phase: "tracking_lost",
+          repetition_summary: repetitionSummary
+        },
+        debug: {
+          ...this.latestState.debug,
+          tracking_sample_ignored: true,
+          current_tracking: Number(trackingConfidence.toFixed(3))
+        }
+      };
+    }
 
     if (
       this.lastUpdateMs !== null &&
@@ -184,7 +207,7 @@ export class Level3SessionLayer {
     this.history.push({
       timestamp: level1State.timestamp,
       action,
-      trackingConfidence: level1State.tracking?.confidence || 0,
+      trackingConfidence,
       motionEnergy: action.motion_energy || 0
     });
     this.history = this.history.slice(-this.config.windowSize);

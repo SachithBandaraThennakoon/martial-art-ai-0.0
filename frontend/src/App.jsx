@@ -39,7 +39,6 @@ function TrainingRoute() {
   useEffect(() => {
     if (!authReady || token || mode === "analysis") return;
     let active = true;
-    setGuestError("");
     loginAsGuest().catch((error) => {
       if (active) setGuestError(error.message || "Guest mode is temporarily unavailable.");
     });
@@ -64,7 +63,16 @@ function TrainingRoute() {
         <span className="studio-live-dot" aria-hidden="true" />
         {guestError ? guestError : "Opening your private guest Studio…"}
         {guestError ? (
-          <button className="btn btn--light btn--small" onClick={() => loginAsGuest().catch(() => {})} type="button">
+          <button
+            className="btn btn--light btn--small"
+            onClick={() => {
+              setGuestError("");
+              loginAsGuest().catch((error) => {
+                setGuestError(error.message || "Guest mode is temporarily unavailable.");
+              });
+            }}
+            type="button"
+          >
             Try again
           </button>
         ) : null}

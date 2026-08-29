@@ -81,9 +81,9 @@ def analyze_movement(required_parts, live_angles):
 
         if value is None:
             if body_part.startswith("fist_"):
-                missing_cue = f"Show your {_label(body_part)} so I can read the fingers."
+                missing_cue = f"Show your {_label(body_part)}."
             elif body_part.startswith("hand_"):
-                missing_cue = f"Show your {_label(body_part)} so I can read the open hand."
+                missing_cue = f"Show your {_label(body_part)}."
             else:
                 missing_cue = f"Show your {_label(body_part)}."
 

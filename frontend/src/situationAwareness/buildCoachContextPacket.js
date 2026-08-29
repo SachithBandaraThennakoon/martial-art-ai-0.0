@@ -102,6 +102,10 @@ function compactSituation(situationAwarenessState) {
   return {
     time_horizon: TEMPORAL_LAYER_KNOWLEDGE.situation_awareness.prediction_horizon,
     situation_state: situation.situation_state || null,
+    raw_state: situation.raw_state || situation.situation_state || null,
+    stable_state: situation.stable_state || situation.situation_state || null,
+    state_confidence: round(situation.state_confidence),
+    stability: situation.stability || {},
     attention_target: situation.attention_target || {},
     feedback_decision: situation.feedback_decision || {},
     reasoning: situation.reasoning || {},

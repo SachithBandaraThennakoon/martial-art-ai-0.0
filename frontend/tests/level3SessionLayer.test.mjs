@@ -112,3 +112,22 @@ test("Level 3 captures sparse events even between scoring updates", () => {
   assert.equal(nextState.session_context.latest_event.type, "peak_extension");
   assert.equal(nextState.session_context.event_counts.peak_extension, 1);
 });
+
+test("Level 3 excludes tracking-loss frames from mastery and fatigue history", () => {
+  const layer = new Level3SessionLayer({ updateIntervalMs: 0, minSamplesForDecision: 2 });
+  const reliable = states(1, { score: 0.8, mistakeRisk: 0.1 });
+  layer.update(reliable);
+
+  const lost = states(2, { score: 0.1, mistakeRisk: 1, motionEnergy: 1 });
+  lost.level1State.tracking.confidence = 0.54;
+  lost.level2State.action_context.temporal_segmentation = {
+    motion_phase: "tracking_lost"
+  };
+  const ignored = layer.update(lost);
+  const recovered = layer.update(states(3, { score: 0.8, mistakeRisk: 0.1 }));
+
+  assert.equal(ignored.debug.tracking_sample_ignored, true);
+  assert.equal(ignored.debug.samples, 1);
+  assert.equal(recovered.debug.samples, 2);
+  assert.ok(recovered.session_context.fatigue_risk < 0.2);
+});

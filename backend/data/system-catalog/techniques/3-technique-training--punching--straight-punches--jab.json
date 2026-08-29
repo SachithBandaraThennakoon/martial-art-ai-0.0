@@ -1074,20 +1074,20 @@
             "feature": "fist_left",
             "body_part": "fist_left",
             "label": "Lead fist remains closed",
-            "target": 60,
-            "min": 50,
+            "target": 30,
+            "min": 10,
             "max": 100,
-            "weight": 1,
+            "weight": 0.5,
             "group": "guard"
           },
           {
             "feature": "fist_right",
             "body_part": "fist_right",
             "label": "Rear fist remains closed",
-            "target": 60,
-            "min": 50,
+            "target": 30,
+            "min": 10,
             "max": 100,
-            "weight": 1,
+            "weight": 0.5,
             "group": "guard"
           },
           {

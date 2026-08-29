@@ -4,9 +4,42 @@ import test from "node:test";
 import {
   buildPracticeSetMessage,
   getCoachFeedbackIntent,
+  getCoachGuidanceCooldownKey,
+  getStableCorrectionTarget,
   getPracticeFeedbackIntent,
   repeatsPendingQuestion
 } from "../src/services/feedbackReasoning.js";
+
+test("composite correction feedback follows the stabilized situation target", () => {
+  assert.equal(
+    getStableCorrectionTarget({
+      raw_state: "observing",
+      stable_state: "correcting",
+      attention_target: { body_part: "elbow_left" }
+    }),
+    "elbow_left"
+  );
+  assert.equal(
+    getStableCorrectionTarget({
+      raw_state: "correcting",
+      stable_state: "observing",
+      attention_target: { body_part: "elbow_left" }
+    }),
+    undefined
+  );
+});
+
+test("fatigue guidance from local and server coaches shares one cooldown", () => {
+  assert.equal(getCoachGuidanceCooldownKey({ action: "fatigue_warning" }), "fatigue");
+  assert.equal(
+    getCoachGuidanceCooldownKey({ action: "attention_prompt", issue: "fatigue_risk" }),
+    "fatigue"
+  );
+  assert.equal(
+    getCoachGuidanceCooldownKey({ action: "attention_prompt", issue: "tracking_unclear" }),
+    null
+  );
+});
 
 test("ready-check paraphrases share one semantic intent", () => {
   const greeting = {

@@ -24,6 +24,10 @@ import {
 } from "../temporal/predictionLedger";
 import { SituationAwarenessLayer } from "../situationAwareness/SituationAwarenessLayer";
 import { buildCoachContextPacket } from "../situationAwareness/buildCoachContextPacket";
+import {
+  buildCoachSessionConfigPacket,
+  buildCoachTrainingFramePacket
+} from "../services/coachWebSocketPackets";
 
 const SYNTHETIC_CONNECTIONS = [
   [0, 11], [0, 12], [11, 12],
@@ -147,7 +151,8 @@ function createSyntheticHand(wrist, side, closurePercent) {
 import {
   applyStudioPerformanceMode,
   getAdaptiveSmoothing,
-  getStudioPerformanceConfig
+  getStudioPerformanceConfig,
+  shouldLoadTemporalPredictor
 } from "../performance/studioPerformanceConfig";
 import { WS_BASE_URL } from "../services/api";
 import { getAccessToken } from "../services/authSession";
@@ -822,7 +827,10 @@ export default function SkeletonCanvas({
   const predictionLedgerRef = useRef(new PredictionLedger());
   const situationAwarenessRef = useRef(new SituationAwarenessLayer());
   const trackingSessionEngineRef = useRef(null);
+  const techniquePackageRef = useRef(null);
   const temporalPhasePredictorRef = useRef(null);
+  const temporalPredictorLoadRef = useRef(null);
+  const temporalPredictorGenerationRef = useRef(0);
   const trackingSessionActiveRef = useRef(trackingSessionActive);
   const trackingSessionPausedRef = useRef(trackingSessionPaused);
   const bodyCalibrationRef = useRef(bodyCalibration);
@@ -905,11 +913,65 @@ export default function SkeletonCanvas({
     });
   }, []);
 
+  const ensureTemporalPhasePredictor = useCallback(() => {
+    if (
+      temporalPhasePredictorRef.current ||
+      temporalPredictorLoadRef.current ||
+      !techniquePackageRef.current
+    ) {
+      return;
+    }
+
+    const techniquePackage = techniquePackageRef.current;
+    const generation = temporalPredictorGenerationRef.current;
+    const loadPromise = (async () => {
+      const { UniversalTemporalOnnxPredictor } = await import(
+        "../tracking/universalTemporalOnnxPredictor.js"
+      );
+      if (generation !== temporalPredictorGenerationRef.current) return;
+      const universal = new UniversalTemporalOnnxPredictor(techniquePackage);
+      await universal.load();
+      if (generation !== temporalPredictorGenerationRef.current) {
+        universal.reset();
+        return;
+      }
+      if (universal.status === "ready") {
+        temporalPhasePredictorRef.current = universal;
+        return;
+      }
+      if (techniquePackage.id !== "jab") return;
+      const { TemporalPhaseOnnxPredictor } = await import(
+        "../tracking/temporalPhaseOnnxPredictor.js"
+      );
+      if (generation !== temporalPredictorGenerationRef.current) return;
+      const legacy = new TemporalPhaseOnnxPredictor(techniquePackage);
+      await legacy.load();
+      if (
+        generation === temporalPredictorGenerationRef.current &&
+        legacy.status === "ready"
+      ) {
+        temporalPhasePredictorRef.current = legacy;
+      } else {
+        legacy.reset();
+      }
+    })().finally(() => {
+      if (temporalPredictorLoadRef.current === loadPromise) {
+        temporalPredictorLoadRef.current = null;
+      }
+    });
+    temporalPredictorLoadRef.current = loadPromise;
+  }, []);
+
   useEffect(() => {
     const technique = getTechniqueFromCatalog({
       techniqueName: sessionConfig?.technique_name
     });
     const techniquePackage = getTechniqueTrackingPackage(technique);
+    temporalPredictorGenerationRef.current += 1;
+    temporalPhasePredictorRef.current?.reset();
+    temporalPhasePredictorRef.current = null;
+    temporalPredictorLoadRef.current = null;
+    techniquePackageRef.current = techniquePackage || null;
     if (!techniquePackage) {
       trackingSessionEngineRef.current = null;
       return undefined;
@@ -925,35 +987,15 @@ export default function SkeletonCanvas({
       }
     }
     trackingSessionEngineRef.current = engine;
-    let predictorDisposed = false;
-    (async () => {
-      const { UniversalTemporalOnnxPredictor } = await import(
-        "../tracking/universalTemporalOnnxPredictor.js"
-      );
-      if (predictorDisposed) return;
-      const universal = new UniversalTemporalOnnxPredictor(techniquePackage);
-      await universal.load();
-      if (predictorDisposed) return;
-      if (universal.status === "ready") {
-        temporalPhasePredictorRef.current = universal;
-        return;
-      }
-      if (techniquePackage.id !== "jab") return;
-      const { TemporalPhaseOnnxPredictor } = await import(
-        "../tracking/temporalPhaseOnnxPredictor.js"
-      );
-      if (predictorDisposed) return;
-      const legacy = new TemporalPhaseOnnxPredictor(techniquePackage);
-      await legacy.load();
-      if (!predictorDisposed && legacy.status === "ready") {
-        temporalPhasePredictorRef.current = legacy;
-      }
-    })();
 
     return () => {
-      predictorDisposed = true;
+      temporalPredictorGenerationRef.current += 1;
       temporalPhasePredictorRef.current?.reset();
       temporalPhasePredictorRef.current = null;
+      temporalPredictorLoadRef.current = null;
+      if (techniquePackageRef.current === techniquePackage) {
+        techniquePackageRef.current = null;
+      }
       engine.end(performance.now());
       if (trackingSessionEngineRef.current === engine) {
         trackingSessionEngineRef.current = null;
@@ -1040,9 +1082,13 @@ export default function SkeletonCanvas({
     wsRef.current.send(
       JSON.stringify({
         type: command.type || "user_message",
+        request_id: command.id,
         message: command.message,
         accuracy: command.accuracy,
         coverage: command.coverage,
+        action: command.action,
+        body_part: command.bodyPart,
+        issue: command.issue,
         mastery_threshold: command.masteryThreshold
       })
     );
@@ -1090,12 +1136,15 @@ export default function SkeletonCanvas({
     );
     if (enableCoach && wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(
-        JSON.stringify({
-          type: "session_config",
-          ...sessionConfig,
-          step_key: currentStepId,
-          step_name: currentStepName
-        })
+        JSON.stringify(buildCoachSessionConfigPacket({
+          sessionConfig,
+          stepKey: currentStepId,
+          stepName: currentStepName,
+          requiredParts:
+            feedbackParts?.length
+              ? feedbackParts
+              : requiredParts
+        }))
       );
     }
   }, [
@@ -1190,12 +1239,15 @@ export default function SkeletonCanvas({
 
         socket.send(JSON.stringify({ type: "authenticate", token }));
         socket.send(
-          JSON.stringify({
-            type: "session_config",
-            ...sessionConfigRef.current,
-            step_key: currentStepIdRef.current,
-            step_name: currentStepNameRef.current
-          })
+          JSON.stringify(buildCoachSessionConfigPacket({
+            sessionConfig: sessionConfigRef.current,
+            stepKey: currentStepIdRef.current,
+            stepName: currentStepNameRef.current,
+            requiredParts:
+              feedbackPartsRef.current?.length
+                ? feedbackPartsRef.current
+                : requiredPartsRef.current
+          }))
         );
 
         if (pendingCommandRef.current) {
@@ -1239,6 +1291,7 @@ export default function SkeletonCanvas({
 
   useEffect(() => {
     let animationFrameId;
+    let delayedDetectionTimerId;
     let cameraStream;
     let isDisposed = false;
     let ownedPose = null;
@@ -1376,19 +1429,11 @@ export default function SkeletonCanvas({
 
       lastCoachSendTimeRef.current = now;
       wsRef.current.send(
-        JSON.stringify({
-          step_id: currentStepIdRef.current,
-          step_name: currentStepNameRef.current,
-          // Temporal recognition keeps using the primary parts, while the
-          // coach must evaluate every configured full-body/quality target.
-          required_parts:
-            feedbackPartsRef.current?.length
-              ? feedbackPartsRef.current
-              : requiredPartsRef.current,
-          angle_targets: measurementPartsRef.current,
-          feedback_targets: feedbackPartsRef.current,
+        JSON.stringify(buildCoachTrainingFramePacket({
+          stepId: currentStepIdRef.current,
+          stepName: currentStepNameRef.current,
           angles: anglesPayload
-        })
+        }))
       );
     };
 
@@ -1486,11 +1531,20 @@ export default function SkeletonCanvas({
       onAngleUpdateRef.current?.(anglesPayload);
     };
 
+    const scheduleDelayedDetection = (delayMs) => {
+      window.clearTimeout(delayedDetectionTimerId);
+      delayedDetectionTimerId = window.setTimeout(() => {
+        delayedDetectionTimerId = undefined;
+        if (!isDisposed) animationFrameId = requestAnimationFrame(detect);
+      }, delayMs);
+    };
+
     const detect = () => {
       const now = performance.now();
 
-      if (isDisposed || document.hidden) {
-        animationFrameId = requestAnimationFrame(detect);
+      if (isDisposed) return;
+      if (document.hidden) {
+        scheduleDelayedDetection(250);
         return;
       }
 
@@ -1498,7 +1552,7 @@ export default function SkeletonCanvas({
       // calculations while waiting so CPU/GPU work cannot compete with speech
       // recognition. Keep the stream attached for an instant resume afterward.
       if (trackingSessionPausedRef.current) {
-        animationFrameId = requestAnimationFrame(detect);
+        scheduleDelayedDetection(120);
         return;
       }
 
@@ -1720,6 +1774,14 @@ export default function SkeletonCanvas({
             auxiliary_features: auxiliaryScores
           }
         };
+        if (shouldLoadTemporalPredictor({
+          enabled: performanceConfigRef.current.onnxEnabled,
+          sessionActive: trackingSessionActiveRef.current,
+          sessionPaused: trackingSessionPausedRef.current,
+          trackingConfidence: level1State.tracking?.confidence
+        })) {
+          ensureTemporalPhasePredictor();
+        }
         const learnedStatePrediction = temporalPhasePredictorRef.current?.update({
           landmarks: frame.worldPose,
           timestampMs: now
@@ -2176,6 +2238,7 @@ export default function SkeletonCanvas({
     return () => {
       isDisposed = true;
       cancelAnimationFrame(animationFrameId);
+      window.clearTimeout(delayedDetectionTimerId);
       cameraStream?.getTracks().forEach((track) => track.stop());
       if (videoElement) {
         videoElement.pause();
@@ -2197,7 +2260,13 @@ export default function SkeletonCanvas({
         visionRef.current = null;
       }
     };
-  }, [inputSource, inputVideoName, inputVideoUrl, onInputStatus]);
+  }, [
+    ensureTemporalPhasePredictor,
+    inputSource,
+    inputVideoName,
+    inputVideoUrl,
+    onInputStatus
+  ]);
 
   useEffect(() => {
     if (

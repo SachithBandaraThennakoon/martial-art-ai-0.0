@@ -66,6 +66,14 @@ function scoreFeature(target, value, toleranceScale) {
   };
 }
 
+function isTransientMotionTarget(target) {
+  if (target.mastery_role === "form") return false;
+  if (["temporal", "advisory"].includes(target.mastery_role)) return true;
+  return /(?:velocity|acceleration|motion_energy|duration|cadence|tempo)/i.test(
+    target.feature || ""
+  );
+}
+
 export function scoreCompositeForm({
   angleTargets = [],
   difficulty = "medium",
@@ -107,8 +115,17 @@ export function scoreCompositeForm({
   nonAngleTargets.forEach((target) => {
     const value = liveFeatures[target.feature];
     const weight = target.weight || 1;
+    const contributesToMastery = !isTransientMotionTarget(target);
     if (!Number.isFinite(value)) {
-      evidence.push({ ...target, group: "motion", kind: "feature", measured: false, weight });
+      evidence.push({
+        ...target,
+        group: "motion",
+        kind: "feature",
+        measured: false,
+        weight,
+        contributesToMastery,
+        targetValue: target.value
+      });
       return;
     }
     const result = scoreFeature(target, value, profile.tolerance_scale);
@@ -119,7 +136,9 @@ export function scoreCompositeForm({
       kind: "feature",
       measured: true,
       value,
-      weight
+      weight,
+      contributesToMastery,
+      targetValue: target.value
     });
   });
 
@@ -155,8 +174,9 @@ export function scoreCompositeForm({
     });
   });
 
-  const totalWeight = evidence.reduce((sum, item) => sum + item.weight, 0);
-  const measured = evidence.filter((item) => item.measured);
+  const masteryEvidence = evidence.filter((item) => item.contributesToMastery !== false);
+  const totalWeight = masteryEvidence.reduce((sum, item) => sum + item.weight, 0);
+  const measured = masteryEvidence.filter((item) => item.measured);
   const measuredWeight = measured.reduce((sum, item) => sum + item.weight, 0);
   const coverage = totalWeight ? Math.round((measuredWeight / totalWeight) * 100) : 0;
   const weightedScore = measuredWeight
@@ -177,6 +197,20 @@ export function scoreCompositeForm({
       ];
     })
   );
+  const temporalEvidence = evidence
+    .filter((item) => item.contributesToMastery === false)
+    .map((item) => ({
+      feature: item.feature,
+      label: item.label,
+      measured: item.measured,
+      current: item.measured ? item.value : null,
+      operator: item.operator,
+      target: item.targetValue,
+      min: item.min,
+      max: item.max,
+      satisfied: item.measured ? !item.issue : false,
+      score: item.measured ? Math.round(item.score) : null
+    }));
   const corrections = measured
     .filter((item) => item.issue && item.score < 80)
     .sort((first, second) => {
@@ -230,6 +264,7 @@ export function scoreCompositeForm({
     difficulty,
     correctionLimit: profile.correction_limit,
     groupScores,
+    temporalEvidence,
     scorable: coverage >= 35
   };
 }
@@ -287,7 +322,7 @@ export function buildNaturalAwarenessFeedback({
     return "Step back; show your full body.";
   }
   if (state === "warning") {
-    return "Pause, breathe, then reset your stance.";
+    return "Pause. Reset your stance.";
   }
   if (!correction) {
     return strength

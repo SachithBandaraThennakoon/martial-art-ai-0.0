@@ -59,6 +59,16 @@ test("step transition feedback is short and actionable", () => {
     }
   });
 
-  assert.equal(message, "Next: Extend lead hand. Punch smoothly.");
-  assert.ok(message.split(/\s+/).length <= 7);
+  assert.equal(message, "Next: Extend lead hand.");
+  assert.ok(message.split(/\s+/).length <= 4);
+});
+
+test("return-to-guard steps are described as recovery rather than initial stance", () => {
+  assert.equal(
+    buildStepTransitionFeedback({
+      fromStep: { step_name: "Extend lead hand" },
+      toStep: { step_name: "Return to guard" }
+    }),
+    "Next: Return to guard."
+  );
 });

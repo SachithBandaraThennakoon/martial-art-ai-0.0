@@ -193,6 +193,14 @@ export default function DataLayersPanel({
         schema={[
           { key: "mode", value: formatLabel(situation.mode) },
           { key: "situation_state", value: formatLabel(situation.situation_state) },
+          { key: "raw_state", value: formatLabel(situation.raw_state) },
+          { key: "stable_state", value: formatLabel(situation.stable_state) },
+          {
+            key: "state_confidence",
+            value: `${formatDecimal(situation.state_confidence)} (${formatPercent(situation.state_confidence)})`
+          },
+          { key: "stability.cluster.support", value: situation.stability?.cluster?.support || 0 },
+          { key: "stability.cluster.samples", value: situation.stability?.cluster?.sample_count || 0 },
           { key: "attention_target.layer", value: formatLabel(attentionTarget.layer) },
           { key: "attention_target.body_part", value: formatLabel(attentionTarget.body_part) },
           { key: "attention_target.issue", value: formatLabel(attentionTarget.issue) },

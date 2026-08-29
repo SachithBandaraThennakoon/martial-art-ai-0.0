@@ -122,6 +122,20 @@ export function applyStudioPerformanceMode(config, mode = "auto", autoTier = "ba
   };
 }
 
+export function shouldLoadTemporalPredictor({
+  enabled,
+  sessionActive,
+  sessionPaused,
+  trackingConfidence
+}) {
+  return Boolean(
+    enabled &&
+    sessionActive &&
+    !sessionPaused &&
+    Number(trackingConfidence) >= 0.65
+  );
+}
+
 export function getAdaptiveSmoothing({ trackingConfidence = 1, motionEnergy = 0 } = {}) {
   if (trackingConfidence < 0.45) return 0.32;
   if (trackingConfidence < 0.65) return 0.42;

@@ -4,6 +4,7 @@ import ActionSkeletonOverlay from "../components/ActionSkeletonOverlay";
 import AwarenessPanel from "../components/AwarenessPanel";
 import BodyCalibrationPanel from "../components/BodyCalibrationPanel";
 import DataLayersPanel from "../components/DataLayersPanel";
+import DiagnosticTraceControls from "../components/DiagnosticTraceControls";
 import Level1DebugPanel from "../components/Level1DebugPanel";
 import Level2DebugPanel from "../components/Level2DebugPanel";
 import SkeletonCanvas from "../components/SkeletonCanvas";
@@ -18,8 +19,19 @@ import {
 } from "../services/browserVoice";
 import {
   getCoachFeedbackIntent,
+  getCoachGuidanceCooldownKey,
+  getStableCorrectionTarget,
   repeatsPendingQuestion
 } from "../services/feedbackReasoning";
+import {
+  formatDegreeAwareAngleFeedback,
+  revalidateQueuedAngleFeedback
+} from "../services/feedbackMessageFormatter";
+import { selectExpectedVoiceCommand } from "../services/voiceCommandRecognition";
+import {
+  createDiagnosticTraceRecorder,
+  downloadDiagnosticTrace
+} from "../services/diagnosticTraceRecorder";
 import {
   buildCorrectionAcknowledgement,
   buildNaturalAwarenessFeedback,
@@ -36,7 +48,7 @@ const VOICE_PROFILES = {
     label: "Master Male",
     gender: "male",
     pitch: 0.72,
-    rate: 0.82
+    rate: 0.92
   },
   calmFemale: {
     label: "Master Female",
@@ -49,6 +61,7 @@ const VOICE_PROFILES = {
 const ACTION_LABELS = {
   ask_ready: "Ready check",
   confirm_start: "Ready check",
+  ask_resume: "Resume check",
   correct: "Correction",
   observe: "Watching",
   hold_good: "Hold good form",
@@ -80,6 +93,9 @@ const VOICE_INTERRUPT_ACTIONS = new Set([
 
 const NATURAL_VOICE_CACHE_LIMIT = 24;
 const MASTERY_HOLD_MS = 1200;
+const STABLE_CORRECTION_CONFIRM_MS = 500;
+const GUIDANCE_COOLDOWN_MS = 12000;
+const DIAGNOSTIC_TRACE_ENABLED = import.meta.env.DEV;
 const splitVoiceWords = (message) =>
   message
     .trim()
@@ -88,6 +104,11 @@ const splitVoiceWords = (message) =>
 
 const coachText = (event) =>
   (event?.message || event?.summary || "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const coachVoiceText = (event) =>
+  (event?.voice_message || event?.message || event?.summary || "")
     .replace(/\s+/g, " ")
     .trim();
 
@@ -165,6 +186,9 @@ export default function TrainMode({
     "Hands-free listening is starting."
   );
   const [conversation, setConversation] = useState([]);
+  const [coachResponsePending, setCoachResponsePending] = useState(false);
+  const [diagnosticTraceActive, setDiagnosticTraceActive] = useState(false);
+  const [diagnosticTraceCount, setDiagnosticTraceCount] = useState(0);
   const [voiceState, setVoiceState] = useState("idle");
   const [currentVoiceMessage, setCurrentVoiceMessage] = useState("");
   const [voiceWords, setVoiceWords] = useState([]);
@@ -178,12 +202,15 @@ export default function TrainMode({
   const lastCoachChatRef = useRef("");
   const lastCoachChatPatternRef = useRef("");
   const lastCoachIntentRef = useRef("");
+  const lastGuidanceAtRef = useRef(new Map());
   const lastSpokenMessageRef = useRef("");
   const lastSpokenIntentRef = useRef("");
   const announcedEntryRef = useRef(false);
   const pendingStepTransitionRef = useRef(null);
   const masteryHoldRef = useRef({ key: "", firstSeenAt: 0, prompted: false });
   const pendingCoachResponseRef = useRef(null);
+  const submittedCoachResponseRef = useRef(null);
+  const coachResponseTimeoutRef = useRef(null);
   const compositeFeedbackRef = useRef({
     signature: "",
     firstSeenAt: 0,
@@ -201,6 +228,14 @@ export default function TrainMode({
   const voiceWordsRef = useRef([]);
   const naturalVoiceCacheRef = useRef(new Map());
   const naturalVoiceRequestsRef = useRef(new Map());
+  const diagnosticContextRef = useRef({});
+  const latestDiagnosticFrameRef = useRef(null);
+  const lastDiagnosticCoachSignatureRef = useRef("");
+  const lastDiagnosticCountUiAtRef = useRef(0);
+  const diagnosticRecorderRef = useRef(null);
+  if (DIAGNOSTIC_TRACE_ENABLED && !diagnosticRecorderRef.current) {
+    diagnosticRecorderRef.current = createDiagnosticTraceRecorder();
+  }
   const safeStepIndex =
     steps.length > 0 ? Math.min(currentStepIndex, steps.length - 1) : 0;
   const currentStep = steps[safeStepIndex];
@@ -267,8 +302,13 @@ export default function TrainMode({
   const focusLabel = isPlayingEarlierFeedback
     ? ""
     : formatBodyPart(coachEvent?.focus_body_part || coachEvent?.body_part);
-  const replyOptions = coachEvent?.question?.options || [];
-  const requiresResponse = Boolean(coachEvent?.requires_response && replyOptions.length);
+  const replyOptions = useMemo(
+    () => coachEvent?.question?.options || [],
+    [coachEvent?.question?.options]
+  );
+  const requiresResponse = Boolean(
+    !coachResponsePending && coachEvent?.requires_response && replyOptions.length
+  );
   const trainSessionComplete = [
     "confirm_session_complete",
     "session_complete"
@@ -299,12 +339,165 @@ export default function TrainMode({
     [currentTechnique?.name, safeStepIndex, steps.length, voiceProfile]
   );
 
-  const goToNextStep = useCallback(() => {
-    setCurrentStepIndex((index) => {
-      if (steps.length === 0) return 0;
-      return Math.min(index + 1, steps.length - 1);
+  diagnosticContextRef.current = {
+    awareness,
+    compositeForm,
+    coachEvent,
+    formDifficulty,
+    level1State,
+    level2State,
+    level3State,
+    level4State,
+    masteryThreshold,
+    ruleEngineFrame,
+    situationAwarenessState,
+    step: {
+      id: currentStep?.id || null,
+      index: safeStepIndex,
+      name: currentStepName || null
+    },
+    session: {
+      active: trainSessionActive,
+      paused: trainSessionPaused,
+      state: trainSessionState
+    },
+    targets: feedbackAngleParts,
+    liveAngles: angles,
+    voice: {
+      hands_free: handsFreeEnabled,
+      input_status: voiceInputStatus,
+      is_listening: isListening,
+      state: voiceState
+    }
+  };
+
+  const handleDiagnosticFrame = useCallback((frame) => {
+    if (!DIAGNOSTIC_TRACE_ENABLED) return;
+    latestDiagnosticFrameRef.current = frame;
+  }, []);
+
+  const syncDiagnosticTraceCount = useCallback((force = false) => {
+    const now = performance.now();
+    if (!force && now - lastDiagnosticCountUiAtRef.current < 1000) return;
+    lastDiagnosticCountUiAtRef.current = now;
+    setDiagnosticTraceCount(diagnosticRecorderRef.current?.size() || 0);
+  }, []);
+
+  const startDiagnosticTrace = useCallback(() => {
+    if (!diagnosticRecorderRef.current) return;
+    diagnosticRecorderRef.current.start({
+      app: "XMartialArt Studio",
+      input_source: inputSource,
+      mode: "train",
+      performance_mode: performanceMode,
+      performance_profile: performanceProfile,
+      technique: currentTechnique?.name || selectedTechniqueName || "unknown",
+      technique_id: currentTechnique?.id || null
     });
-  }, [steps.length]);
+    lastDiagnosticCoachSignatureRef.current = "";
+    setDiagnosticTraceActive(true);
+    syncDiagnosticTraceCount(true);
+  }, [
+    currentTechnique,
+    inputSource,
+    performanceMode,
+    performanceProfile,
+    selectedTechniqueName,
+    syncDiagnosticTraceCount
+  ]);
+
+  const stopDiagnosticTrace = useCallback(() => {
+    diagnosticRecorderRef.current?.stop();
+    setDiagnosticTraceActive(false);
+    syncDiagnosticTraceCount(true);
+  }, [syncDiagnosticTraceCount]);
+
+  const clearDiagnosticTrace = useCallback(() => {
+    diagnosticRecorderRef.current?.clear();
+    setDiagnosticTraceActive(false);
+    setDiagnosticTraceCount(0);
+  }, []);
+
+  const downloadTrace = useCallback(() => {
+    if (diagnosticRecorderRef.current) {
+      downloadDiagnosticTrace(diagnosticRecorderRef.current);
+    }
+  }, []);
+
+  const recordDiagnosticEvent = useCallback((kind, payload = {}) => {
+    if (!DIAGNOSTIC_TRACE_ENABLED) return;
+    if (diagnosticRecorderRef.current?.event(kind, {
+      step: diagnosticContextRef.current.step,
+      ...payload
+    })) {
+      syncDiagnosticTraceCount();
+    }
+  }, [syncDiagnosticTraceCount]);
+
+  useEffect(() => {
+    if (!DIAGNOSTIC_TRACE_ENABLED || !coachEvent) return;
+    const signature = JSON.stringify([
+      coachEvent.action || null,
+      coachText(coachEvent),
+      coachEvent.focus_body_part || coachEvent.body_part || null,
+      coachEvent.issue || null,
+      coachEvent.question?.kind || null,
+      Boolean(coachEvent.requires_response),
+      coachEvent.voice_message || null,
+      coachEvent.request_id || null
+    ]);
+    if (signature === lastDiagnosticCoachSignatureRef.current) return;
+    lastDiagnosticCoachSignatureRef.current = signature;
+    if (diagnosticRecorderRef.current.event("coach", {
+      step: diagnosticContextRef.current.step,
+      request_id: coachEvent.request_id || null,
+      feedback: {
+        action: coachEvent.action || null,
+        message: coachText(coachEvent),
+        voice_message: coachEvent.voice_message || coachText(coachEvent),
+        display_message: coachEvent.display_message || coachText(coachEvent),
+        feedback_detail: coachEvent.feedback_detail || null,
+        speak: Boolean(coachEvent.speak),
+        focus_body_part: coachEvent.focus_body_part || coachEvent.body_part || null,
+        issue: coachEvent.issue || null,
+        requires_response: Boolean(coachEvent.requires_response),
+        question: coachEvent.question || null
+      }
+    })) {
+      syncDiagnosticTraceCount();
+    }
+  }, [coachEvent, syncDiagnosticTraceCount]);
+
+  useEffect(() => {
+    if (!DIAGNOSTIC_TRACE_ENABLED || !diagnosticTraceActive) return undefined;
+    const capture = () => {
+      const latest = latestDiagnosticFrameRef.current || {};
+      try {
+        const accepted = diagnosticRecorderRef.current?.frame({
+          ...latest,
+          timestamp: performance.now(),
+          angles: latest.angles || diagnosticContextRef.current.liveAngles,
+          trackingConfidence:
+            latest.trackingConfidence ??
+            diagnosticContextRef.current.level1State?.tracking?.confidence
+        }, diagnosticContextRef.current);
+        if (accepted) syncDiagnosticTraceCount();
+      } catch (error) {
+        diagnosticRecorderRef.current?.event("diagnostic_capture_error", {
+          message: error?.message || "Diagnostic interval capture failed"
+        });
+      }
+    };
+    capture();
+    const timer = window.setInterval(capture, 200);
+    return () => window.clearInterval(timer);
+  }, [diagnosticTraceActive, syncDiagnosticTraceCount]);
+
+  useEffect(() => () => {
+    if (diagnosticRecorderRef.current?.isActive()) {
+      diagnosticRecorderRef.current.stop("component_unmounted");
+    }
+  }, []);
 
   const goToStepIndex = useCallback((nextIndex) => {
     setCurrentStepIndex((index) => {
@@ -332,6 +525,8 @@ export default function TrainMode({
     const awarenessPriority = ["tracking_unclear", "warning"].includes(
       situation?.situation_state
     );
+    const stableCorrectionTarget = getStableCorrectionTarget(situation);
+    const correctionStateConfirmed = stableCorrectionTarget !== undefined;
     const now = Date.now();
     const feedbackState = compositeFeedbackRef.current;
     const stepKey = currentStep?.id || currentStepName || "";
@@ -358,6 +553,14 @@ export default function TrainMode({
         (
           !compositeForm.scorable ||
           compositeForm.coverage < 50 ||
+          (!correctionStateConfirmed && !previousResolved) ||
+          (
+            correctionStateConfirmed &&
+            stableCorrectionTarget &&
+            !compositeForm.corrections.some(
+              (item) => item.bodyPart === stableCorrectionTarget
+            )
+          ) ||
           (!compositeForm.corrections.length && !previousResolved)
         )
       )
@@ -365,12 +568,17 @@ export default function TrainMode({
       return;
     }
 
+    const eligibleCorrections = correctionStateConfirmed
+      ? compositeForm.corrections.filter(
+          (item) => !stableCorrectionTarget || item.bodyPart === stableCorrectionTarget
+        )
+      : [];
     const correction = awarenessPriority
       ? null
-      : compositeForm.corrections.find(
+      : eligibleCorrections.find(
           (item) =>
             now - (feedbackState.recentParts.get(item.bodyPart) || 0) >= 14000
-        ) || compositeForm.corrections[0];
+        ) || eligibleCorrections[0];
     const signature = awarenessPriority
       ? `awareness:${situation.situation_state}`
       : previousResolved
@@ -387,7 +595,9 @@ export default function TrainMode({
       return;
     }
     if (
-      now - feedbackState.firstSeenAt < (awarenessPriority ? 700 : previousResolved ? 900 : 1400) ||
+      now - feedbackState.firstSeenAt < (
+        awarenessPriority ? 700 : previousResolved ? 900 : STABLE_CORRECTION_CONFIRM_MS
+      ) ||
       now - feedbackState.lastSpokenAt < (previousResolved ? 3200 : 7500) ||
       (
         correction && !previousResolved &&
@@ -397,7 +607,7 @@ export default function TrainMode({
       return;
     }
 
-    const message = previousResolved && !awarenessPriority
+    const naturalMessage = previousResolved && !awarenessPriority
       ? buildCorrectionAcknowledgement(previousCorrection, correction)
       : buildNaturalAwarenessFeedback({
           correction,
@@ -408,7 +618,12 @@ export default function TrainMode({
             (item) => item.bodyPart !== correction?.bodyPart
           )
         });
-    if (!message) return;
+    const angleFeedback = !previousResolved && !awarenessPriority
+      ? formatDegreeAwareAngleFeedback(correction)
+      : null;
+    const message = angleFeedback?.displayMessage || naturalMessage;
+    const voiceMessage = angleFeedback?.voiceMessage || naturalMessage;
+    if (!message || !voiceMessage) return;
     feedbackState.lastSpokenAt = now;
     if (correction) {
       feedbackState.recentParts.set(correction.bodyPart, now);
@@ -419,6 +634,9 @@ export default function TrainMode({
       action: awarenessPriority ? "attention_prompt" : previousResolved ? "hold_good" : "correct",
       message,
       summary: message,
+      voice_message: voiceMessage,
+      display_message: message,
+      feedback_detail: angleFeedback?.details || null,
       speak: true,
       feedback_intent: `composite:${signature}`,
       focus_body_part:
@@ -427,8 +645,21 @@ export default function TrainMode({
         accuracy: compositeForm.accuracy,
         coverage: compositeForm.coverage,
         group: correction?.group || "awareness",
-        situation_state: situation?.situation_state
+        situation_state: situation?.situation_state,
+        current_angle: angleFeedback?.details?.current_angle ?? null,
+        ideal_angle: angleFeedback?.details?.ideal_angle ?? null,
+        adjustment_degrees: angleFeedback?.details?.adjustment_degrees ?? null
       }
+    });
+    setCoachCommand({
+      id: `feedback-${signature}-${now}`,
+      type: "feedback_observed",
+      message,
+      action: awarenessPriority ? "attention_prompt" : previousResolved ? "hold_good" : "correct",
+      bodyPart: correction?.bodyPart || situation?.attention_target?.body_part || "whole_body",
+      issue: correction?.issue || situation?.attention_target?.issue || null,
+      accuracy: compositeForm.accuracy,
+      coverage: compositeForm.coverage
     });
     if (textEnabled) {
       appendConversation({ role: "ai", text: message });
@@ -446,21 +677,79 @@ export default function TrainMode({
   ]);
 
   const handleCoachEvent = useCallback((event) => {
+    const submittedResponseId = submittedCoachResponseRef.current;
+    if (submittedResponseId) {
+      if (event?.request_id !== submittedResponseId) {
+        return;
+      }
+      submittedCoachResponseRef.current = null;
+      if (coachResponseTimeoutRef.current) {
+        window.clearTimeout(coachResponseTimeoutRef.current);
+        coachResponseTimeoutRef.current = null;
+      }
+      setCoachResponsePending(false);
+    }
+    const isNonQuestionGuidance = !event?.requires_response && [
+      "attention_prompt",
+      "fatigue_warning",
+      "ask_focus"
+    ].includes(event?.action);
     if (
       pendingCoachResponseRef.current &&
-      ["correct", "observe", "hold_good", "waiting"].includes(event?.action)
+      (["correct", "observe", "hold_good", "waiting"].includes(event?.action) ||
+        isNonQuestionGuidance)
     ) {
       return;
     }
     if (
       Date.now() < localFeedbackPriorityUntilRef.current &&
-      ["correct", "observe", "hold_good", "waiting"].includes(event?.action)
+      (["correct", "observe", "hold_good", "waiting"].includes(event?.action) ||
+        isNonQuestionGuidance)
     ) {
       return;
     }
-    setCoachEvent(event);
+
+    const guidanceKey = getCoachGuidanceCooldownKey(event);
+    if (guidanceKey) {
+      const now = Date.now();
+      const lastGuidanceAt = lastGuidanceAtRef.current.get(guidanceKey) || 0;
+      if (now - lastGuidanceAt < GUIDANCE_COOLDOWN_MS) return;
+      lastGuidanceAtRef.current.set(guidanceKey, now);
+    }
     if (event?.memory?.ready || event?.action === "restart_training") {
       setTrainSessionStarted(true);
+    }
+
+    if (event?.action === "advance_step") {
+      const nextIndex = Number.isInteger(event.next_step_index)
+        ? event.next_step_index
+        : Math.min(safeStepIndex + 1, steps.length - 1);
+      const nextStep = steps[nextIndex];
+      const transitionMessage = buildStepTransitionFeedback({
+        fromStep: currentStep,
+        toStep: nextStep,
+        form: compositeForm,
+        direction: 1
+      });
+      const transitionEvent = {
+        ...event,
+        action: "step_transition",
+        message: transitionMessage,
+        summary: transitionMessage,
+        voice_message: transitionMessage,
+        feedback_intent: `step_transition:${nextStep?.id || nextIndex}`,
+        focus_body_part:
+          nextStep?.angle_targets?.find((target) => target.role === "primary")
+            ?.body_part || null
+      };
+      localFeedbackPriorityUntilRef.current = Date.now() + 5000;
+      pendingStepTransitionRef.current = transitionEvent;
+      setCoachEvent(transitionEvent);
+      if (textEnabled) {
+        appendConversation({ role: "ai", text: transitionMessage });
+      }
+      goToStepIndex(nextIndex);
+      return;
     }
 
     const message = coachText(event);
@@ -470,6 +759,11 @@ export default function TrainMode({
     const isRepeatedCorrection =
       event?.action === "correct" &&
       messagePattern === lastCoachChatPatternRef.current;
+    const isRepeatedWaitingState =
+      event?.action === "waiting" && repeatsQuestion;
+    if (!isRepeatedWaitingState && !(isRepeatedCorrection && !event?.speak)) {
+      setCoachEvent(event);
+    }
     const shouldAddCoachMessage =
       message &&
       message !== lastCoachChatRef.current &&
@@ -486,15 +780,6 @@ export default function TrainMode({
       lastCoachChatPatternRef.current = messagePattern;
       lastCoachIntentRef.current = feedbackIntent;
       appendConversation({ role: "ai", text: message });
-    }
-
-    if (event?.action === "advance_step") {
-      if (Number.isInteger(event.next_step_index)) {
-        goToStepIndex(event.next_step_index);
-      } else {
-        goToNextStep();
-      }
-      return;
     }
 
     if (
@@ -514,7 +799,16 @@ export default function TrainMode({
     if (event?.action === "switch_practice" && onModeChange) {
       onModeChange("practice");
     }
-  }, [appendConversation, goToNextStep, goToStepIndex, onModeChange, textEnabled]);
+  }, [
+    appendConversation,
+    compositeForm,
+    currentStep,
+    goToStepIndex,
+    onModeChange,
+    safeStepIndex,
+    steps,
+    textEnabled
+  ]);
 
   const handleAngleUpdate = useCallback((liveAngles) => {
     setAngles(liveAngles);
@@ -607,12 +901,41 @@ export default function TrainMode({
     const trimmed = message.trim();
 
     if (!trimmed) return;
+    const commandId = `${Date.now()}-${trimmed}`;
+    if (DIAGNOSTIC_TRACE_ENABLED && diagnosticRecorderRef.current.event("user_response", {
+      step: diagnosticContextRef.current.step,
+      message: trimmed,
+      request_id: commandId,
+      voice: diagnosticContextRef.current.voice
+    })) {
+      syncDiagnosticTraceCount();
+    }
+    const wasAwaitingCoachResponse = Boolean(
+      pendingCoachResponseRef.current || requiresResponse
+    );
+    if (wasAwaitingCoachResponse) {
+      submittedCoachResponseRef.current = commandId;
+      setCoachResponsePending(true);
+      if (coachResponseTimeoutRef.current) {
+        window.clearTimeout(coachResponseTimeoutRef.current);
+      }
+      coachResponseTimeoutRef.current = window.setTimeout(() => {
+        if (submittedCoachResponseRef.current !== commandId) return;
+        submittedCoachResponseRef.current = null;
+        coachResponseTimeoutRef.current = null;
+        setCoachResponsePending(false);
+      }, 6000);
+    }
     if (pendingCoachResponseRef.current) {
       pendingCoachResponseRef.current = null;
       localFeedbackPriorityUntilRef.current = Date.now() + 3000;
     }
 
-    const navigation = parseTrainingStepCommand(trimmed, steps.length);
+    // When the coach owns the turn, send even navigation-like answers back to
+    // the coach so its pending question and session memory advance together.
+    const navigation = wasAwaitingCoachResponse
+      ? null
+      : parseTrainingStepCommand(trimmed, steps.length);
     if (navigation) {
       if (textEnabled) {
         appendConversation({ role: "user", text: trimmed });
@@ -658,7 +981,7 @@ export default function TrainMode({
     }
 
     setCoachCommand({
-      id: `${Date.now()}-${trimmed}`,
+      id: commandId,
       message: trimmed
     });
     if (textEnabled) {
@@ -669,8 +992,10 @@ export default function TrainMode({
     appendConversation,
     compositeForm,
     currentStep,
+    requiresResponse,
     safeStepIndex,
     steps,
+    syncDiagnosticTraceCount,
     textEnabled
   ]);
 
@@ -717,15 +1042,23 @@ export default function TrainMode({
 
     const recognition = new SpeechRecognition();
     recognitionRef.current = recognition;
-    recognition.lang = "en-US";
+    const browserLanguage = navigator.language || "en-US";
+    recognition.lang = /^en(?:-|$)/i.test(browserLanguage) ? browserLanguage : "en-US";
+    // One focused utterance finalizes much faster than continuous dictation.
+    // onend already restarts listening when another answer is needed.
+    recognition.continuous = false;
     recognition.interimResults = true;
-    recognition.maxAlternatives = 3;
+    recognition.maxAlternatives = 5;
 
     let finalTranscript = "";
 
     recognition.onstart = () => {
       listeningRef.current = true;
       setIsListening(true);
+      recordDiagnosticEvent("voice_listening_started", {
+        requires_response: requiresResponse,
+        reply_options: replyOptions.map((option) => option.value)
+      });
       setVoiceInputStatus(
         requiresResponse
           ? "Your turn. Say one of the reply choices or type below."
@@ -736,18 +1069,22 @@ export default function TrainMode({
       listeningRef.current = false;
       recognitionRef.current = null;
       setIsListening(false);
+      recordDiagnosticEvent("voice_listening_ended", {
+        will_restart: Boolean(shouldListenRef.current && handsFreeEnabled)
+      });
 
       if (shouldListenRef.current && handsFreeEnabled) {
         setVoiceInputStatus("Listening again in a moment.");
         restartListenTimerRef.current = window.setTimeout(() => {
           startVoiceInput(false);
-        }, 450);
+        }, requiresResponse ? 150 : 450);
       }
     };
     recognition.onerror = (event) => {
       listeningRef.current = false;
       recognitionRef.current = null;
       setIsListening(false);
+      recordDiagnosticEvent("voice_error", { error: event.error || "unknown" });
 
       if (event.error === "not-allowed" || event.error === "service-not-allowed") {
         shouldListenRef.current = false;
@@ -763,21 +1100,43 @@ export default function TrainMode({
       );
     };
     recognition.onresult = (event) => {
+      const finalAlternatives = [];
       for (let index = event.resultIndex; index < event.results.length; index += 1) {
         const result = event.results[index];
         const transcript = result?.[0]?.transcript || "";
 
         if (result?.isFinal) {
-          finalTranscript += ` ${transcript}`;
+          if (transcript.trim()) finalTranscript += ` ${transcript.trim()}`;
+          for (let alternativeIndex = 0; alternativeIndex < result.length; alternativeIndex += 1) {
+            const alternativeTranscript = result[alternativeIndex]?.transcript?.trim();
+            if (!alternativeTranscript) continue;
+            finalAlternatives.push({
+              transcript: alternativeTranscript,
+              confidence: result[alternativeIndex]?.confidence
+            });
+          }
         } else if (transcript.trim()) {
           setVoiceInputStatus(`Hearing: ${transcript.trim()}`);
         }
       }
 
-      const command = finalTranscript.trim();
+      const selected = selectExpectedVoiceCommand(finalAlternatives, requiresResponse ? replyOptions : []);
+      const command = selected?.command || (!requiresResponse ? finalTranscript.trim() : "");
+      if (finalAlternatives.length) {
+        recordDiagnosticEvent("voice_final_result", {
+          alternatives: finalAlternatives,
+          selected_command: command || null,
+          accepted: Boolean(command),
+          requires_response: requiresResponse
+        });
+      }
       if (command) {
         sendCoachMessage(command);
-        setVoiceInputStatus(`Command heard: ${command}`);
+        setVoiceInputStatus(`Answer heard: ${selected?.transcript || command}`);
+        finalTranscript = "";
+        recognition.stop();
+      } else if (finalAlternatives.length && requiresResponse) {
+        setVoiceInputStatus("I heard you, but not a reply choice. Listening again.");
         finalTranscript = "";
         recognition.stop();
       }
@@ -785,13 +1144,23 @@ export default function TrainMode({
 
     try {
       recognition.start();
-    } catch {
+    } catch (error) {
       recognitionRef.current = null;
       listeningRef.current = false;
       setIsListening(false);
       setVoiceInputStatus("Voice input could not start. Tap listen again.");
+      recordDiagnosticEvent("voice_start_failed", {
+        error: error?.message || "recognition.start failed"
+      });
     }
-  }, [handsFreeEnabled, requiresResponse, sendCoachMessage, voiceState]);
+  }, [
+    handsFreeEnabled,
+    recordDiagnosticEvent,
+    replyOptions,
+    requiresResponse,
+    sendCoachMessage,
+    voiceState
+  ]);
 
   const getNaturalVoiceKey = useCallback((message) => {
     const profile = VOICE_PROFILES[voiceProfile];
@@ -863,29 +1232,45 @@ export default function TrainMode({
       const timeoutMs = Math.max(2200, splitVoiceWords(message).length * 700);
       let settled = false;
       let playbackTimeoutId = null;
-      const finish = (ok) => {
+      let playbackStartedAt = 0;
+      const finish = (ok, reason) => {
         if (settled) return;
         settled = true;
         if (playbackTimeoutId) window.clearTimeout(playbackTimeoutId);
+        if (reason === "timeout") {
+          audio.pause();
+        }
         release();
         if (currentAudioRef.current === audio) {
           currentAudioRef.current = null;
         }
+        recordDiagnosticEvent("voice_playback_finished", {
+          message,
+          reason,
+          duration_ms: playbackStartedAt
+            ? Math.round(performance.now() - playbackStartedAt)
+            : 0
+        });
         resolve(ok);
       };
 
       audio.onplay = () => {
+        playbackStartedAt = performance.now();
+        recordDiagnosticEvent("voice_playback_started", {
+          message,
+          word_count: splitVoiceWords(message).length
+        });
         setVoiceState("speaking");
         startVoiceWordProgress();
-        playbackTimeoutId = window.setTimeout(() => finish(true), timeoutMs);
+        playbackTimeoutId = window.setTimeout(() => finish(true, "timeout"), timeoutMs);
       };
-      audio.onended = () => finish(true);
-      audio.onerror = () => finish(false);
-      playBrowserAudio(audio).catch(() => finish(false));
+      audio.onended = () => finish(true, "ended");
+      audio.onerror = () => finish(false, "error");
+      playBrowserAudio(audio).catch(() => finish(false, "play_failed"));
     });
 
     return played;
-  }, [startVoiceWordProgress]);
+  }, [recordDiagnosticEvent, startVoiceWordProgress]);
 
   const speakWithBestVoice = useCallback(async (message, requestId) => {
     const cacheKey = getNaturalVoiceKey(message);
@@ -918,16 +1303,46 @@ export default function TrainMode({
       return;
     }
 
-    const nextMessage = voiceQueueRef.current.shift();
+    const nextItem = voiceQueueRef.current.shift();
 
-    if (!nextMessage) {
+    if (!nextItem) {
       setVoiceState("idle");
       clearVoiceWords();
       return;
     }
 
+    let nextMessage = typeof nextItem === "string" ? nextItem : nextItem.message;
+    if (typeof nextItem !== "string" && nextItem.feedbackDetail?.kind === "angle") {
+      const validation = revalidateQueuedAngleFeedback(
+        nextItem.feedbackDetail,
+        diagnosticContextRef.current
+      );
+      if (!validation.valid) {
+        recordDiagnosticEvent("voice_feedback_discarded", {
+          feedback_detail: nextItem.feedbackDetail,
+          reason: validation.reason
+        });
+        setVoiceState("idle");
+        clearVoiceWords();
+        if (voiceQueueRef.current.length) window.setTimeout(playVoiceQueue, 0);
+        return;
+      }
+      nextMessage = validation.formatted?.voiceMessage || nextMessage;
+    }
+
+    if (!nextMessage || nextMessage === lastSpokenMessageRef.current) {
+      setVoiceState("idle");
+      clearVoiceWords();
+      if (voiceQueueRef.current.length) window.setTimeout(playVoiceQueue, 0);
+      return;
+    }
+
     isSpeakingRef.current = true;
     const requestId = voiceRequestIdRef.current;
+    lastSpokenMessageRef.current = nextMessage;
+    lastSpokenIntentRef.current = typeof nextItem === "string"
+      ? ""
+      : nextItem.feedbackIntent;
     setCurrentVoiceMessage(nextMessage);
     prepareVoiceWords(nextMessage);
 
@@ -945,43 +1360,65 @@ export default function TrainMode({
         }, 420);
       }
     }
-  }, [clearVoiceWords, prepareVoiceWords, speakWithBestVoice, voiceEnabled]);
+  }, [
+    clearVoiceWords,
+    prepareVoiceWords,
+    recordDiagnosticEvent,
+    speakWithBestVoice,
+    voiceEnabled
+  ]);
 
   const queueVoiceMessage = useCallback((
     message,
-    { feedbackIntent = "", interrupt = false } = {}
+    { feedbackDetail = null, feedbackIntent = "", interrupt = false } = {}
   ) => {
     const trimmed = message.trim();
+    const pendingMessage = voiceQueueRef.current[0]?.message || voiceQueueRef.current[0] || "";
     const repeatsPendingQuestion = Boolean(
       feedbackIntent.startsWith("question:") &&
       feedbackIntent === lastSpokenIntentRef.current
     );
 
-    if (!trimmed || trimmed === lastSpokenMessageRef.current || repeatsPendingQuestion) {
+    if (
+      !trimmed ||
+      trimmed === lastSpokenMessageRef.current ||
+      trimmed === pendingMessage ||
+      repeatsPendingQuestion
+    ) {
       return;
     }
 
+    const queuedFeedback = {
+      message: trimmed,
+      feedbackDetail,
+      feedbackIntent
+    };
+    recordDiagnosticEvent("voice_feedback_queued", {
+      message: trimmed,
+      feedback_intent: feedbackIntent,
+      interrupt,
+      waiting_for_active_speech: isSpeakingRef.current
+    });
+
     if (interrupt) {
       interruptVoicePlayback();
-      voiceQueueRef.current = [trimmed];
+      voiceQueueRef.current = [queuedFeedback];
     } else {
       // Pose analysis can emit several corrections per second. Finish the
       // sentence being spoken and replace stale pending feedback with the
       // latest useful correction.
-      voiceQueueRef.current = [trimmed];
+      voiceQueueRef.current = [queuedFeedback];
     }
-
-    lastSpokenMessageRef.current = trimmed;
-    lastSpokenIntentRef.current = feedbackIntent;
     playVoiceQueue();
-  }, [interruptVoicePlayback, playVoiceQueue]);
+  }, [interruptVoicePlayback, playVoiceQueue, recordDiagnosticEvent]);
 
   useEffect(() => {
-    const message = coachText(coachEvent);
+    const message = coachVoiceText(coachEvent);
 
     if (
       !voiceEnabled ||
       !message ||
+      coachEvent?.speak === false ||
       message === lastSpokenMessageRef.current
     ) {
       return;
@@ -989,6 +1426,7 @@ export default function TrainMode({
 
     queueVoiceMessage(message, {
       feedbackIntent: getCoachFeedbackIntent(coachEvent),
+      feedbackDetail: coachEvent?.feedback_detail || null,
       interrupt: VOICE_INTERRUPT_ACTIONS.has(coachEvent?.action)
     });
   }, [coachEvent, queueVoiceMessage, voiceEnabled]);
@@ -1044,6 +1482,10 @@ export default function TrainMode({
     if (restartListenTimerRef.current) {
       window.clearTimeout(restartListenTimerRef.current);
       restartListenTimerRef.current = null;
+    }
+    if (coachResponseTimeoutRef.current) {
+      window.clearTimeout(coachResponseTimeoutRef.current);
+      coachResponseTimeoutRef.current = null;
     }
     if (wordTimerRef.current) {
       window.clearInterval(wordTimerRef.current);
@@ -1253,6 +1695,7 @@ export default function TrainMode({
           onSituationAwarenessUpdate={setSituationAwarenessState}
           onRuleEngineSessionComplete={setRuleEngineSessionSummary}
           onRuleEngineFrameUpdate={setRuleEngineFrame}
+          onLandmarkFrame={DIAGNOSTIC_TRACE_ENABLED ? handleDiagnosticFrame : undefined}
           trackingSessionActive={trainSessionActive}
           trackingSessionPaused={trainSessionPaused}
           onAccuracyUpdate={setServerAccuracy}
@@ -1338,6 +1781,17 @@ export default function TrainMode({
             </span>
           </div>
         </div>
+
+        {DIAGNOSTIC_TRACE_ENABLED ? (
+          <DiagnosticTraceControls
+            active={diagnosticTraceActive}
+            recordCount={diagnosticTraceCount}
+            onClear={clearDiagnosticTrace}
+            onDownload={downloadTrace}
+            onStart={startDiagnosticTrace}
+            onStop={stopDiagnosticTrace}
+          />
+        ) : null}
 
         <div className="panel-block panel-block--calibration">
           <BodyCalibrationPanel

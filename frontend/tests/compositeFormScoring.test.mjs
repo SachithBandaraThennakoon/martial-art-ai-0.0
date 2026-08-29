@@ -56,6 +56,39 @@ test("missing supporting evidence reduces coverage instead of becoming zero", ()
   assert.ok(result.coverage < 100);
 });
 
+test("transient motion evidence does not penalize a correctly held form", () => {
+  const result = scoreCompositeForm({
+    angleTargets,
+    liveAngles: { elbow_left: 150, knee_left: 125 },
+    liveFeatures: {
+      lead_wrist_forward_velocity: 0,
+      lead_elbow_angular_velocity: 0
+    },
+    nonAngleTargets: [
+      {
+        feature: "lead_wrist_forward_velocity",
+        label: "Lead wrist travels forward quickly",
+        operator: "gte",
+        value: 0.22,
+        weight: 2
+      },
+      {
+        feature: "lead_elbow_angular_velocity",
+        label: "Lead elbow actively opens",
+        operator: "gte",
+        value: 25,
+        weight: 2
+      }
+    ]
+  });
+
+  assert.equal(result.accuracy, 100);
+  assert.equal(result.coverage, 100);
+  assert.equal(result.corrections.length, 0);
+  assert.equal(result.temporalEvidence.length, 2);
+  assert.equal(result.temporalEvidence[0].satisfied, false);
+});
+
 test("difficulty changes tolerance without excluding body corrections", () => {
   const easy = scoreCompositeForm({
     angleTargets,

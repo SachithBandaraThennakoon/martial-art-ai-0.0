@@ -1175,6 +1175,7 @@ async def train(websocket: WebSocket):
     last_body_part = None
     last_issue = None
     last_action = None
+    configured_required_parts = []
 
     try:
         while True:
@@ -1211,6 +1212,7 @@ async def train(websocket: WebSocket):
 
             if event_type == "session_config":
                 access_granted = False
+                configured_required_parts = parsed.get("required_parts") or []
                 previous_step_key = coach.current_step_key
                 previous_step_index = coach.current_step_index
                 was_ready = coach.is_ready
@@ -1269,6 +1271,7 @@ async def train(websocket: WebSocket):
                 db.commit()
                 db.refresh(training_session)
 
+                speak = True
                 if not sent_initial_greeting:
                     if coach.state in {"confirm_session_complete", "session_complete"}:
                         coach._reset_temporal_focus(keep_ready=True)
@@ -1293,6 +1296,7 @@ async def train(websocket: WebSocket):
                     last_issue = None
                     last_action = None
                     last_feedback_time = 0
+                    speak = False
                     if coach.current_step_index == 0 and previous_step_index > 0:
                         message = f"Start again. {coach.current_step_name}."
                     else:
@@ -1307,7 +1311,7 @@ async def train(websocket: WebSocket):
                     message = f"Start {coach.technique_name}."
                     action = "observe"
 
-                coach_event = coach.panel_event(message, action=action)
+                coach_event = coach.panel_event(message, action=action, speak=speak)
                 last_feedback = coach_event["summary"]
                 last_body_part = coach_event.get("body_part")
                 last_issue = coach_event.get("issue")
@@ -1328,6 +1332,7 @@ async def train(websocket: WebSocket):
 
             if event_type == "user_message":
                 coach_event = coach.user_message(parsed.get("message", ""))
+                coach_event["request_id"] = parsed.get("request_id")
                 last_feedback = coach_event["summary"]
                 last_body_part = coach_event.get("body_part")
                 last_issue = coach_event.get("issue")
@@ -1350,10 +1355,24 @@ async def train(websocket: WebSocket):
                 last_issue = coach_event.get("issue")
                 last_action = coach_event.get("action")
                 last_feedback_time = time.time()
+                await websocket.send_text(json.dumps(coach_event))
                 if user_record:
                     _save_coach_memory(db, user_record.id, coach, coach_event)
                     last_memory_save_time = time.time()
-                await websocket.send_text(json.dumps(coach_event))
+                continue
+
+            if event_type == "feedback_observed":
+                coach.feedback_observed_event(
+                    parsed.get("message", ""),
+                    parsed.get("action", "correct"),
+                    parsed.get("body_part"),
+                    parsed.get("issue"),
+                    parsed.get("accuracy", 0),
+                    parsed.get("coverage", 0),
+                )
+                if user_record:
+                    _save_coach_memory(db, user_record.id, coach, None)
+                    last_memory_save_time = time.time()
                 continue
 
             if event_type == "coach_intelligence_context":
@@ -1393,7 +1412,9 @@ async def train(websocket: WebSocket):
             step_id = parsed.get("step_id")
             step_name = parsed.get("step_name") or "selected step"
             live_angles = parsed.get("angles", {})
-            required_parts_payload = parsed.get("required_parts") or []
+            required_parts_payload = (
+                parsed.get("required_parts") or configured_required_parts
+            )
 
             current_time = time.time()
 

@@ -36,12 +36,13 @@ export function buildStepTransitionFeedback({
   }
 
   const name = String(toStep.step_name || "next step").toLowerCase();
-  if (/guard|stance/.test(name)) return "Next: Guard stance. Settle and chamber.";
-  if (/extend|strike|punch/.test(name)) {
-    return "Next: Extend lead hand. Punch smoothly.";
-  }
+  // "Return to guard" contains "guard", so classify recovery before stance.
   if (/return|recover/.test(name)) {
-    return "Next: Return to guard. Recover cleanly.";
+    return "Next: Return to guard.";
   }
-  return `Next: ${toStep.step_name}. Move smoothly.`;
+  if (/guard|stance/.test(name)) return "Next: Guard stance.";
+  if (/extend|strike|punch/.test(name)) {
+    return "Next: Extend lead hand.";
+  }
+  return `Next: ${toStep.step_name}.`;
 }

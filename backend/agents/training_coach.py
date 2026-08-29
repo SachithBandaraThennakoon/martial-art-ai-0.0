@@ -59,6 +59,8 @@ class CoachSession:
     recent_user_messages: list[str] = field(default_factory=list)
     recent_feedback: list[str] = field(default_factory=list)
     recent_intelligence_contexts: list[dict] = field(default_factory=list)
+    session_history: list[dict] = field(default_factory=list)
+    latest_awareness: dict = field(default_factory=dict)
     body_part_trends: dict[str, dict] = field(default_factory=dict)
     last_spoken_corrections: dict[str, int] = field(default_factory=dict)
     pending_speech_focus: dict | None = None
@@ -81,6 +83,13 @@ class CoachSession:
         self.recent_user_messages = (self.recent_user_messages + [text])[-6:]
         intent = self.intent_agent.classify(text, self.pending_question).name
         self.last_user_intent = intent
+        self._record_session_event(
+            source="user",
+            kind="response" if self.pending_question else "command",
+            action=intent,
+            message=text,
+            pending_question=self.pending_question,
+        )
 
         if intent == "finish":
             self.is_ready = False
@@ -279,14 +288,6 @@ class CoachSession:
             if self._question_reminder_due():
                 return self._waiting_for_answer_event(accuracy, analysis=analysis)
 
-            sustained_event = self._sustained_accuracy_event(step_key, accuracy, readiness_issues, analysis)
-            if sustained_event:
-                if sustained_event.get("action") in {"advance_step", "session_complete_prompt"}:
-                    self.is_paused = False
-                    self._clear_pending_question()
-                    self.practice_suggested = False
-                return sustained_event
-
             focus = ordered_issues[0] if ordered_issues else None
             message = "Practice or continue?"
             body_part = None
@@ -328,10 +329,6 @@ class CoachSession:
 
         self._update_attention_memory(analysis)
         self._update_plateau_memory(accuracy)
-
-        sustained_event = self._sustained_accuracy_event(step_key, accuracy, readiness_issues, analysis)
-        if sustained_event:
-            return sustained_event
 
         active_item = self._active_issue_item(analysis)
 
@@ -402,9 +399,14 @@ class CoachSession:
                     body_part = focus["body_part"]
                     issue_name = focus["issue"]
             else:
-                message = "Good. Hold position."
+                # Angle-only accuracy is useful for selecting corrections, but
+                # it is not the step-completion score shown in the UI. The
+                # client sends mastery_event() after the composite score has
+                # stayed above the configured threshold. Avoid starting a
+                # second, conflicting hold countdown here.
+                message = "Tracking your form."
                 body_part = None
-                issue_name = "good"
+                issue_name = "observing"
 
         auxiliary_focus = (
             body_part is not None and self._is_readiness_target(body_part)
@@ -414,6 +416,8 @@ class CoachSession:
             if not auxiliary_focus or self.correction_frames >= 4
             else False
         )
+        if issue_name == "observing":
+            speak = False
         self.state = "give_feedback"
         self.last_feedback = message
         self.recent_feedback = (self.recent_feedback + [message])[-8:]
@@ -532,14 +536,48 @@ class CoachSession:
         decision_score = reasoning.get("decision_score") or 0
         should_speak = bool(feedback_decision.get("should_speak"))
         important = (
-            situation_state in {"tracking_unclear", "warning", "correcting", "advance_ready"}
+            situation_state in {
+                "tracking_unclear", "warning", "correcting", "advance_ready", "resume_ready"
+            }
             or decision_score >= 0.68
+        )
+
+        self.latest_awareness = self._compact_awareness_snapshot(
+            situation_state,
+            attention_target,
+            next_action,
+            reasoning,
+            temporal_layers,
         )
 
         if not important or signature == self.last_situation_signature:
             return None
 
+        self._record_session_event(
+            source="awareness",
+            kind="situation_change",
+            action=next_action.get("command") or situation_state,
+            message=(feedback_decision.get("message") or "").strip(),
+            evidence=self.latest_awareness,
+        )
         self.last_situation_signature = signature
+        if situation_state == "resume_ready" or next_action.get("command") == "confirm_resume":
+            self.is_ready = False
+            self.is_paused = True
+            self.state = "confirm_resume"
+            self._set_pending_question("resume")
+            return self.panel_event(
+                f"Ready to continue {self.current_step_name}?",
+                accuracy=int((temporal_layers.get("level3_session", {}).get("mastery_score") or 0) * 100),
+                action="ask_resume",
+                issue="resume",
+                speak=True,
+                intelligence_context={
+                    "situation_awareness": situation,
+                    "temporal_summary": temporal_layers,
+                },
+            )
+
         effective_target = self._best_short_term_focus(attention_target)
         message = self._intelligence_message(
             situation_state=situation_state,
@@ -568,17 +606,43 @@ class CoachSession:
             },
         )
 
+    def feedback_observed_event(
+        self,
+        message,
+        action="correct",
+        body_part=None,
+        issue=None,
+        accuracy=0,
+        coverage=0,
+    ):
+        text = (message or "").strip()
+        if not text or self.pending_question:
+            return
+
+        self.last_feedback = text
+        self.recent_feedback = (self.recent_feedback + [text])[-8:]
+        self._record_session_event(
+            source="system_feedback",
+            kind="feedback",
+            action=action,
+            message=text,
+            evidence={
+                "accuracy": accuracy,
+                "coverage": coverage,
+                "body_part": body_part,
+                "issue": issue,
+                "awareness": self.latest_awareness,
+            },
+        )
+
     def initial_greeting(self):
-        name_prefix = f"Hi {self.student_name}, welcome back. " if self.student_name else "Welcome. "
+        name_prefix = f"Hi {self.student_name}. " if self.student_name else "Hello. "
         self.is_ready = False
         self.is_paused = True
         self.readiness_prompted = True
         self.state = "confirm_start"
         self._set_pending_question("ready")
-        return (
-            f"{name_prefix}I will guide one step at a time and keep corrections short. "
-            "Are you ready to begin?"
-        )
+        return f"{name_prefix}Ready to begin?"
 
     def panel_event(
         self,
@@ -592,6 +656,22 @@ class CoachSession:
         next_step_index=None,
         intelligence_context=None
     ):
+        feedback_intent = self._feedback_intent(action, body_part, issue)
+        if action != "waiting":
+            self._record_session_event(
+                source="coach",
+                kind="question" if self.pending_question else "feedback",
+                action=action,
+                message=message,
+                pending_question=self.pending_question,
+                evidence={
+                    "accuracy": accuracy,
+                    "body_part": body_part or self.active_body_part,
+                    "issue": issue or self.active_issue,
+                    "feedback_intent": feedback_intent,
+                },
+            )
+
         event = {
             "type": "coach",
             "mode": self.mode,
@@ -606,7 +686,7 @@ class CoachSession:
             "body_part": body_part,
             "issue": issue,
             "speak": speak,
-            "feedback_intent": self._feedback_intent(action, body_part, issue),
+            "feedback_intent": feedback_intent,
             "focus_body_part": self.active_body_part,
             "analysis": analysis or [],
             "requires_response": bool(self.pending_question),
@@ -615,6 +695,9 @@ class CoachSession:
                 "recent_user_messages": self.recent_user_messages,
                 "recent_feedback": self.recent_feedback,
                 "recent_intelligence_contexts": self.recent_intelligence_contexts,
+                "session_history": self.session_history,
+                "latest_awareness": self.latest_awareness,
+                "turn_state": self._turn_state(),
                 "completed_steps": list(self.completed_steps),
                 "ready": self.is_ready,
                 "paused": self.is_paused,
@@ -663,6 +746,8 @@ class CoachSession:
             "recent_user_messages": self.recent_user_messages,
             "recent_feedback": self.recent_feedback,
             "recent_intelligence_contexts": self.recent_intelligence_contexts,
+            "session_history": self.session_history,
+            "latest_awareness": self.latest_awareness,
             "body_part_trends": self.body_part_trends,
             "last_spoken_corrections": self.last_spoken_corrections,
             "last_situation_signature": self.last_situation_signature,
@@ -682,6 +767,78 @@ class CoachSession:
             self.question_asked_at = time.monotonic()
             self.question_reminders = 0
 
+        self.session_history = list(self.session_history or [])[-24:]
+        self.latest_awareness = dict(self.latest_awareness or {})
+
+    def _turn_state(self):
+        if self.pending_question:
+            return "awaiting_user"
+        if self.is_paused:
+            return "paused"
+        return "observing"
+
+    def _record_session_event(
+        self,
+        source,
+        kind,
+        action=None,
+        message="",
+        pending_question=None,
+        evidence=None,
+    ):
+        entry = {
+            "timestamp": round(time.time(), 3),
+            "source": source,
+            "kind": kind,
+            "action": action,
+            "message": (message or "").strip(),
+            "step": {
+                "id": self.current_step_key,
+                "name": self.current_step_name,
+                "index": self.current_step_index,
+            },
+            "pending_question": pending_question,
+            "evidence": evidence or {},
+            "occurrences": 1,
+        }
+        previous = self.session_history[-1] if self.session_history else None
+        signature_keys = ("source", "kind", "action", "message", "pending_question")
+        if previous and all(previous.get(key) == entry.get(key) for key in signature_keys):
+            previous["timestamp"] = entry["timestamp"]
+            previous["evidence"] = entry["evidence"]
+            previous["occurrences"] = previous.get("occurrences", 1) + 1
+            return
+
+        self.session_history = (self.session_history + [entry])[-24:]
+
+    def _compact_awareness_snapshot(
+        self,
+        situation_state,
+        attention_target,
+        next_action,
+        reasoning,
+        temporal_layers,
+    ):
+        level1 = temporal_layers.get("level1_motion") or {}
+        level2 = temporal_layers.get("level2_action") or {}
+        level3 = temporal_layers.get("level3_session") or {}
+        return {
+            "situation_state": situation_state,
+            "attention_target": {
+                "body_part": attention_target.get("body_part"),
+                "issue": attention_target.get("issue"),
+            },
+            "recommended_action": next_action.get("command"),
+            "decision_score": reasoning.get("decision_score") or 0,
+            "tracking_confidence": level1.get("tracking_confidence") or 0,
+            "movement_phase": level2.get("motion_phase"),
+            "mistake_risk": level2.get("mistake_risk") or 0,
+            "mastery_score": level3.get("mastery_score") or 0,
+            "consistency_score": level3.get("consistency_score") or 0,
+            "fatigue_risk": level3.get("fatigue_risk") or 0,
+            "session_trend": level3.get("trend"),
+        }
+
     def _set_pending_question(self, question):
         if self.pending_question == question:
             return
@@ -699,6 +856,10 @@ class CoachSession:
         return {
             "ready": [
                 {"label": "I'm ready", "value": "ready"},
+                {"label": "Wait", "value": "wait"},
+            ],
+            "resume": [
+                {"label": "Continue", "value": "ready"},
                 {"label": "Wait", "value": "wait"},
             ],
             "next_step": [
@@ -741,12 +902,14 @@ class CoachSession:
     def _waiting_for_answer_event(self, accuracy=0, analysis=None, issue="waiting"):
         waiting_messages = {
             "ready": "Are you ready to begin?",
+            "resume": f"Ready to continue {self.current_step_name}?",
             "next_step": "Would you like the next step or repeat this one?",
             "practice": "Would you like focused practice or keep training?",
             "session_complete": "Choose practice, train again, or finish.",
         }
         reminder_messages = {
             "ready": "Take your time. Choose I'm ready or Wait.",
+            "resume": "Choose Continue or Wait.",
             "next_step": "Choose Next step, Repeat step, or Wait.",
             "practice": "Choose Practice or Keep training.",
             "session_complete": "Choose Practice, Train again, or Finish.",
@@ -798,7 +961,7 @@ class CoachSession:
 
         self.is_paused = True
         self._set_pending_question("next_step")
-        message = "Good work. Are you ready to move to the next step?"
+        message = "Next step or repeat?"
         return self.panel_event(
             message,
             accuracy=accuracy,
@@ -838,7 +1001,7 @@ class CoachSession:
         if situation_state == "tracking_unclear":
             return "Tracking is unclear. Step fully into camera view."
         if situation_state == "warning":
-            return "Slow this rep down. Reset your guard, then continue."
+            return "Slow down. Reset your guard."
         if situation_state == "correcting":
             user_layer = temporal_layers.get("level4_user", {})
             session_layer = temporal_layers.get("level3_session", {})
@@ -1187,17 +1350,15 @@ class CoachSession:
 
         if improvement >= TREND_SPEAK_DELTA:
             self.pending_speech_focus["kind"] = "improving"
-            if delta <= 3:
-                return f"Good. Almost there. You reduced {spoken_label} from {previous_delta} to {delta} {unit_label} off."
-            return f"Good correction. You reduced {spoken_label} from {previous_delta} to {delta} {unit_label} off. Keep going slowly."
+            return f"Good. {sentence_label}: {delta} {unit_label} off."
 
         if regression >= TREND_SPEAK_DELTA:
             self.pending_speech_focus["kind"] = "regressing"
-            return f"Careful. {sentence_label} moved away from target, now {delta} {unit_label} off. Bring it back slowly."
+            return f"Reset {spoken_label}: {delta} {unit_label} off."
 
         if force_short:
             self.pending_speech_focus["kind"] = "steady"
-            return f"Hold steady. {sentence_label} is {delta} {unit_label} off."
+            return f"Hold {spoken_label}: {delta} {unit_label} off."
 
         if delta <= 3:
             self.pending_speech_focus["kind"] = "almost"
