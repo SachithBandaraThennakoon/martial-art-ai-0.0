@@ -21,7 +21,8 @@ import {
   getCoachFeedbackIntent,
   getCoachGuidanceCooldownKey,
   getStableCorrectionTarget,
-  repeatsPendingQuestion
+  repeatsPendingQuestion,
+  shouldSpeakVisibleCoachFeedback
 } from "../services/feedbackReasoning";
 import {
   formatDegreeAwareAngleFeedback,
@@ -164,8 +165,8 @@ export default function TrainMode({
     return Number.isFinite(stored) && stored >= 70 && stored <= 95 ? stored : 80;
   });
   const [ruleEngineFrame, setRuleEngineFrame] = useState(null);
-  const [feedback, setFeedback] = useState("");
   const [coachEvent, setCoachEvent] = useState(null);
+  const feedback = coachText(coachEvent);
   const [awareness, setAwareness] = useState(null);
   const [level1State, setLevel1State] = useState(null);
   const [level2State, setLevel2State] = useState(null);
@@ -205,7 +206,7 @@ export default function TrainMode({
   const lastGuidanceAtRef = useRef(new Map());
   const lastSpokenMessageRef = useRef("");
   const lastSpokenIntentRef = useRef("");
-  const announcedEntryRef = useRef(false);
+  const announcedEntryStepRef = useRef("");
   const pendingStepTransitionRef = useRef(null);
   const masteryHoldRef = useRef({ key: "", firstSeenAt: 0, prompted: false });
   const pendingCoachResponseRef = useRef(null);
@@ -457,7 +458,7 @@ export default function TrainMode({
         voice_message: coachEvent.voice_message || coachText(coachEvent),
         display_message: coachEvent.display_message || coachText(coachEvent),
         feedback_detail: coachEvent.feedback_detail || null,
-        speak: Boolean(coachEvent.speak),
+        speak: shouldSpeakVisibleCoachFeedback(coachEvent),
         focus_body_part: coachEvent.focus_body_part || coachEvent.body_part || null,
         issue: coachEvent.issue || null,
         requires_response: Boolean(coachEvent.requires_response),
@@ -1418,7 +1419,7 @@ export default function TrainMode({
     if (
       !voiceEnabled ||
       !message ||
-      coachEvent?.speak === false ||
+      !shouldSpeakVisibleCoachFeedback(coachEvent) ||
       message === lastSpokenMessageRef.current
     ) {
       return;
@@ -1515,11 +1516,14 @@ export default function TrainMode({
       masteryState.prompted = false;
     }
 
+    const minimumCoverage = Number(currentStep?.mastery_requirements?.minimum_coverage) || 50;
+    const masteryHoldMs = Number(currentStep?.mastery_requirements?.hold_ms) || MASTERY_HOLD_MS;
     const meetsThreshold = Boolean(
       trainSessionActive &&
       !requiresResponse &&
       compositeForm.scorable &&
-      compositeForm.coverage >= 50 &&
+      compositeForm.masteryReady &&
+      compositeForm.coverage >= minimumCoverage &&
       compositeForm.accuracy >= masteryThreshold
     );
     if (!meetsThreshold) {
@@ -1533,7 +1537,7 @@ export default function TrainMode({
       masteryState.firstSeenAt = now;
       return;
     }
-    if (now - masteryState.firstSeenAt < MASTERY_HOLD_MS) return;
+    if (now - masteryState.firstSeenAt < masteryHoldMs) return;
 
     masteryState.prompted = true;
     pendingCoachResponseRef.current = {
@@ -1550,6 +1554,7 @@ export default function TrainMode({
   }, [
     compositeForm,
     currentStep?.id,
+    currentStep?.mastery_requirements,
     currentTechnique?.id,
     masteryThreshold,
     requiresResponse,
@@ -1579,7 +1584,6 @@ export default function TrainMode({
     lastCoachIntentRef.current = "";
     setAngles({});
     setServerAccuracy(0);
-    setFeedback("");
     if (techniqueChanged) {
       setTrainSessionStarted(false);
       setRuleEngineSessionSummary(null);
@@ -1594,8 +1598,11 @@ export default function TrainMode({
       ? `Settle into ${currentStepName}. I am syncing the live angles.`
       : "Choose a step to begin.";
 
-    const shouldSpeakEntry = Boolean(currentStepName && !announcedEntryRef.current);
-    announcedEntryRef.current = announcedEntryRef.current || shouldSpeakEntry;
+    const entryStepKey = currentStep?.id || currentStepName || "none";
+    const shouldSpeakEntry = Boolean(
+      currentStepName && announcedEntryStepRef.current !== entryStepKey
+    );
+    announcedEntryStepRef.current = entryStepKey;
 
     setCoachEvent({
       message,
@@ -1699,8 +1706,6 @@ export default function TrainMode({
           trackingSessionActive={trainSessionActive}
           trackingSessionPaused={trainSessionPaused}
           onAccuracyUpdate={setServerAccuracy}
-          onFeedbackUpdate={setFeedback}
-          onSummaryUpdate={setFeedback}
           onCoachEvent={handleCoachEvent}
         />
       </section>

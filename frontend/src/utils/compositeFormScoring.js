@@ -26,10 +26,16 @@ export function correctionUrgency(item, feedbackPriority = []) {
 function scoreAngle(target, value, toleranceScale) {
   const ideal =
     target.target_angle ?? Math.round((Number(target.min) + Number(target.max)) / 2);
-  const lowerTolerance = Math.max(1, ideal - target.min) * toleranceScale;
-  const upperTolerance = Math.max(1, target.max - ideal) * toleranceScale;
-  const low = ideal - lowerTolerance;
-  const high = ideal + upperTolerance;
+  const scaledLow = ideal - Math.max(1, ideal - target.min) * toleranceScale;
+  const scaledHigh = ideal + Math.max(1, target.max - ideal) * toleranceScale;
+  const low = Number.isFinite(Number(target.hard_min))
+    ? Math.max(scaledLow, Number(target.hard_min))
+    : scaledLow;
+  const high = Number.isFinite(Number(target.hard_max))
+    ? Math.min(scaledHigh, Number(target.hard_max))
+    : scaledHigh;
+  const lowerTolerance = Math.max(1, ideal - low);
+  const upperTolerance = Math.max(1, high - ideal);
   const distance = Math.abs(value - ideal);
   const allowedDistance = value < ideal ? lowerTolerance : upperTolerance;
   const score = distance <= allowedDistance
@@ -211,6 +217,24 @@ export function scoreCompositeForm({
       satisfied: item.measured ? !item.issue : false,
       score: item.measured ? Math.round(item.score) : null
     }));
+  const requiredEvidence = masteryEvidence.filter((item) => item.mastery_required === true);
+  const masteryBlockers = requiredEvidence
+    .filter((item) => {
+      if (!item.measured) return true;
+      if (item.kind === "feature") return Boolean(item.issue);
+      return item.value < item.min || item.value > item.max;
+    })
+    .map((item) => ({
+      bodyPart: item.body_part || item.feature,
+      label: item.label,
+      kind: item.kind,
+      measured: item.measured,
+      current: item.measured ? item.value : null,
+      min: item.min,
+      max: item.max,
+      operator: item.operator,
+      target: item.targetValue
+    }));
   const corrections = measured
     .filter((item) => item.issue && item.score < 80)
     .sort((first, second) => {
@@ -265,6 +289,8 @@ export function scoreCompositeForm({
     correctionLimit: profile.correction_limit,
     groupScores,
     temporalEvidence,
+    masteryReady: requiredEvidence.length === 0 || masteryBlockers.length === 0,
+    masteryBlockers,
     scorable: coverage >= 35
   };
 }

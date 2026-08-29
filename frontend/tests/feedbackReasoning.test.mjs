@@ -7,7 +7,8 @@ import {
   getCoachGuidanceCooldownKey,
   getStableCorrectionTarget,
   getPracticeFeedbackIntent,
-  repeatsPendingQuestion
+  repeatsPendingQuestion,
+  shouldSpeakVisibleCoachFeedback
 } from "../src/services/feedbackReasoning.js";
 
 test("composite correction feedback follows the stabilized situation target", () => {
@@ -67,6 +68,27 @@ test("a reminder is distinct from the original ready check", () => {
   };
 
   assert.equal(repeatsPendingQuestion(reminder, "question:ready"), false);
+});
+
+test("visible coach feedback speaks even when a legacy event marks it silent", () => {
+  assert.equal(
+    shouldSpeakVisibleCoachFeedback({
+      message: "Good. Hold this shape two more seconds.",
+      speak: false
+    }),
+    true
+  );
+  assert.equal(
+    shouldSpeakVisibleCoachFeedback({
+      message: "Internal model state updated.",
+      voice_policy: "silent"
+    }),
+    false
+  );
+  assert.equal(
+    shouldSpeakVisibleCoachFeedback({ message: "", speak: true }),
+    false
+  );
 });
 
 test("practice setup paraphrases are deduplicated but set start is new", () => {

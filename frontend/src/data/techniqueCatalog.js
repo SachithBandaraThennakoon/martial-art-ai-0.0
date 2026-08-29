@@ -20,6 +20,7 @@ function buildTechniqueCatalog({
   const normalizePackageStep = (step, index, techniqueId) => {
     const angleTargets = Array.isArray(step.angle_targets)
       ? step.angle_targets.map((angle) => ({
+          ...angle,
           body_part: angle.body_part,
           label: angle.label || angle.body_part,
           target_angle:
@@ -64,6 +65,7 @@ function buildTechniqueCatalog({
     };
 
     return {
+      ...step,
       id: step.id ?? `${techniqueId}-step-${step.step_number ?? index + 1}`,
       step_number: step.step_number ?? index + 1,
       step_name: step.step_name || `Step ${index + 1}`,

@@ -46,6 +46,23 @@
       {
         "step_number": 1,
         "step_name": "Guard stance",
+        "goal": "Build a balanced guard before the punch begins.",
+        "key_cues": [
+          "Keep both elbows softly bent near 90 degrees.",
+          "Keep both hands closed and ready.",
+          "Face the target without leaning."
+        ],
+        "why_it_matters": "A stable guard gives the jab a repeatable start and a safe position to return to.",
+        "avoid": [
+          "Lifting the shoulders",
+          "Straightening either elbow",
+          "Leaning beyond the stance"
+        ],
+        "transition_condition": "Hold both elbow angles between 70 and 110 degrees with at least 65% body coverage for 1.2 seconds.",
+        "mastery_requirements": {
+          "minimum_coverage": 65,
+          "hold_ms": 1200
+        },
         "phase_states": [
           "GUARD"
         ],
@@ -76,7 +93,8 @@
             "min": 70,
             "max": 110,
             "role": "primary",
-            "weight": 2
+            "weight": 2,
+            "mastery_required": true
           },
           {
             "body_part": "elbow_right",
@@ -85,7 +103,8 @@
             "min": 70,
             "max": 110,
             "role": "primary",
-            "weight": 2
+            "weight": 2,
+            "mastery_required": true
           },
           {
             "body_part": "shoulder_left",
@@ -486,6 +505,24 @@
       {
         "step_number": 2,
         "step_name": "Extend lead hand",
+        "goal": "Send the lead fist directly to useful reach while the rear hand protects.",
+        "key_cues": [
+          "Drive the fist straight toward the target.",
+          "Reach 155 to 177 degrees at the lead elbow.",
+          "Stop short of locking the elbow.",
+          "Keep the rear hand near guard."
+        ],
+        "why_it_matters": "Controlled extension creates reach without sacrificing the elbow or the defensive guard.",
+        "avoid": [
+          "Locking the lead elbow",
+          "Dropping the rear hand",
+          "Reaching by leaning the torso"
+        ],
+        "transition_condition": "Reach a lead-elbow angle of 155 to 177 degrees with at least 65% body coverage, then hold the controlled position for 1.2 seconds.",
+        "mastery_requirements": {
+          "minimum_coverage": 65,
+          "hold_ms": 1200
+        },
         "counts_rep": true,
         "phase_states": [
           "EXTENSION",
@@ -518,7 +555,9 @@
             "min": 155,
             "max": 177,
             "role": "primary",
-            "weight": 3
+            "weight": 3,
+            "hard_max": 177,
+            "mastery_required": true
           },
           {
             "body_part": "elbow_right",
@@ -693,7 +732,7 @@
             "feature": "rear_wrist_guard_distance",
             "label": "Rear hand stays controlled",
             "operator": "lte",
-            "value": 0.65,
+            "value": 0.55,
             "weight": 1.5,
             "priority": "important"
           },
@@ -936,6 +975,23 @@
       {
         "step_number": 3,
         "step_name": "Return to guard",
+        "goal": "Retract the lead hand promptly and rebuild the original guard.",
+        "key_cues": [
+          "Bring the lead fist back on the same direct path.",
+          "Restore the lead elbow to 70 to 110 degrees.",
+          "Keep both fists closed and the stance balanced."
+        ],
+        "why_it_matters": "The recovery limits exposure and prepares the next action.",
+        "avoid": [
+          "Letting the lead hand drift downward",
+          "Leaving the elbow extended",
+          "Relaxing the rear guard"
+        ],
+        "transition_condition": "Restore the lead-elbow angle to 70 to 110 degrees with at least 65% body coverage and hold guard for 1.2 seconds.",
+        "mastery_requirements": {
+          "minimum_coverage": 65,
+          "hold_ms": 1200
+        },
         "phase_states": [
           "RETRACTION",
           "RECOVERY"
@@ -967,7 +1023,8 @@
             "min": 70,
             "max": 110,
             "role": "primary",
-            "weight": 2.5
+            "weight": 2.5,
+            "mastery_required": true
           },
           {
             "body_part": "elbow_right",
@@ -1074,8 +1131,8 @@
             "feature": "fist_left",
             "body_part": "fist_left",
             "label": "Lead fist remains closed",
-            "target": 30,
-            "min": 10,
+            "target": 90,
+            "min": 70,
             "max": 100,
             "weight": 0.5,
             "group": "guard"
@@ -1084,8 +1141,8 @@
             "feature": "fist_right",
             "body_part": "fist_right",
             "label": "Rear fist remains closed",
-            "target": 30,
-            "min": 10,
+            "target": 90,
+            "min": 70,
             "max": 100,
             "weight": 0.5,
             "group": "guard"
@@ -1379,7 +1436,8 @@
           },
           "schema_version": "1.0",
           "coordinate_space": "body_normalized_v1"
-        }
+        },
+        "transition_duration_ms": 650
       }
     ],
     "biomechanics": {
@@ -1515,7 +1573,7 @@
                 {
                   "feature": "lead_elbow_angle",
                   "operator": "between",
-                  "min": 125,
+                  "min": 145,
                   "max": 180
                 },
                 {
@@ -1634,7 +1692,7 @@
             "condition": {
               "feature": "maximum_lead_elbow_angle",
               "operator": "lt",
-              "value": 125
+              "value": 150
             },
             "confirmation": {
               "min_frames": 3,
@@ -1668,7 +1726,7 @@
             "condition": {
               "feature": "rear_wrist_guard_distance",
               "operator": "gte",
-              "value": 0.55
+              "value": 0.65
             },
             "confirmation": {
               "min_frames": 4,
@@ -1781,7 +1839,7 @@
           "candidate_sensitivity": 0.7,
           "live_corrections": true,
           "post_session_correction": false,
-          "cue_cooldown_ms": 1400
+          "cue_cooldown_ms": 2400
         },
         "practice": {
           "transition_confidence_min": 0.58,

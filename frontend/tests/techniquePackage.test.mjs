@@ -84,3 +84,39 @@ test("every Jab angle target has a valid ideal inside its range", async () => {
     }
   }
 });
+
+test("Jab teaching targets and temporal rules agree on safe progression", async () => {
+  const document = await loadTechniqueTrainingConfig(trackingRoot, "jab");
+  const [, extension, recovery] = document.steps;
+  const leadExtension = extension.angle_targets.find(
+    (target) => target.body_part === "elbow_left"
+  );
+  const recoveryFists = recovery.quality_targets.filter((target) =>
+    ["fist_left", "fist_right"].includes(target.feature)
+  );
+  const fullExtensionRule = document.temporal_runtime.states.states.FULL_EXTENSION
+    .enter_rules.all.find((rule) => rule.feature === "lead_elbow_angle");
+  const insufficientExtension = document.temporal_runtime.errors.errors.find(
+    (error) => error.id === "insufficient_extension"
+  );
+  const excessiveExtension = document.temporal_runtime.errors.errors.find(
+    (error) => error.id === "excessive_elbow_extension"
+  );
+  const droppedGuard = document.temporal_runtime.errors.errors.find(
+    (error) => error.id === "dropped_guard"
+  );
+  const rearGuardTarget = extension.non_angle_features.find(
+    (target) => target.feature === "rear_wrist_guard_distance"
+  );
+
+  assert.equal(leadExtension.mastery_required, true);
+  assert.equal(leadExtension.hard_max, 177);
+  assert.ok(fullExtensionRule.min < leadExtension.min);
+  assert.ok(fullExtensionRule.max >= excessiveExtension.condition.value);
+  assert.ok(insufficientExtension.condition.value >= 150);
+  assert.ok(rearGuardTarget.value < droppedGuard.condition.value);
+  assert.ok(recoveryFists.every((target) => target.target >= 70 && target.min >= 70));
+  assert.ok(document.steps.every((step) => step.transition_duration_ms > 0));
+  assert.ok(document.steps.every((step) => step.transition_condition));
+  assert.ok(document.steps.every((step) => step.mastery_requirements.minimum_coverage >= 50));
+});

@@ -11,6 +11,17 @@ export function getCoachFeedbackIntent(event) {
   return `${event?.action || event?.state || "coach"}:${normalizeFeedbackText(message).replace(/\d+/g, "#")}`;
 }
 
+export function shouldSpeakVisibleCoachFeedback(event) {
+  const message = event?.voice_message || event?.message || event?.summary || "";
+  if (!String(message).trim()) return false;
+
+  // Older runtimes use `speak: false` as a cadence hint even when the same
+  // message is shown. The client queue owns cadence and deduplication now.
+  return event?.voice_policy !== "silent" &&
+    event?.internal_only !== true &&
+    event?.should_show_text !== false;
+}
+
 export function getPracticeFeedbackIntent(message) {
   const normalized = normalizeFeedbackText(message);
 

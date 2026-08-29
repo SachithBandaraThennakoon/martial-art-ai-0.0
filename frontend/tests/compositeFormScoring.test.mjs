@@ -216,6 +216,55 @@ test("biomechanical weight can raise a severe angle correction", () => {
   assert.equal(result.corrections[0].weight, 3);
 });
 
+test("required targets block mastery even when the composite score is high", () => {
+  const result = scoreCompositeForm({
+    angleTargets: [
+      {
+        ...angleTargets[0],
+        min: 155,
+        max: 177,
+        target_angle: 170,
+        mastery_required: true,
+        weight: 3
+      },
+      ...Array.from({ length: 8 }, (_, index) => ({
+        body_part: `support_${index}`,
+        label: `Support ${index}`,
+        target_angle: 100,
+        min: 80,
+        max: 120
+      }))
+    ],
+    liveAngles: {
+      elbow_left: 145,
+      ...Object.fromEntries(Array.from({ length: 8 }, (_, index) => [`support_${index}`, 100]))
+    }
+  });
+
+  assert.ok(result.accuracy >= 80);
+  assert.equal(result.masteryReady, false);
+  assert.equal(result.masteryBlockers[0].bodyPart, "elbow_left");
+});
+
+test("hard angle limits are never expanded by easy difficulty", () => {
+  const result = scoreCompositeForm({
+    angleTargets: [{
+      body_part: "elbow_left",
+      label: "Lead elbow extension",
+      target_angle: 170,
+      min: 155,
+      max: 177,
+      hard_max: 177,
+      mastery_required: true
+    }],
+    difficulty: "easy",
+    liveAngles: { elbow_left: 180 }
+  });
+
+  assert.equal(result.masteryReady, false);
+  assert.equal(result.corrections[0].direction, "decrease");
+});
+
 test("coach acknowledges success before naming the next correction", () => {
   assert.equal(
     buildCorrectionAcknowledgement(

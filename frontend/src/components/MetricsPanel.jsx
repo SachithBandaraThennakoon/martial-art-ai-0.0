@@ -59,13 +59,11 @@ export default function MetricsPanel({
 
     return "Good";
   };
-  const compositeCorrectionText = topCompositeCorrection
-    ? topCompositeCorrection.kind === "angle"
-      ? `${topCompositeCorrection.label}: ${topCompositeCorrection.current}°, ideal ${topCompositeCorrection.ideal}°.`
-      : `${topCompositeCorrection.label}. Adjust the movement quality and repeat smoothly.`
-    : topCompositeStrength
-      ? `${topCompositeStrength.label} is correct at ${topCompositeStrength.current}${topCompositeStrength.kind === "angle" ? "°" : "%"}, close to the ${topCompositeStrength.ideal}${topCompositeStrength.kind === "angle" ? "°" : "%"} ideal.`
-      : null;
+  const acceptedCoachText =
+    coachEvent?.display_message ||
+    coachEvent?.summary ||
+    coachEvent?.message ||
+    feedback;
 
   return (
     <div className="metrics-panel">
@@ -107,9 +105,7 @@ export default function MetricsPanel({
         <p className="eyebrow">Master Focus</p>
         <h2>{formatBodyPart(focusPart)}</h2>
         <p>
-          {compositeCorrectionText ||
-            coachEvent?.summary ||
-            feedback ||
+          {acceptedCoachText ||
             currentStep?.step_name ||
             "Move into frame."}
         </p>
