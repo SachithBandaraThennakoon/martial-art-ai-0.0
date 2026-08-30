@@ -68,8 +68,10 @@ const JAB = {
   }
 };
 
-test("model-enabled Jab does not fall back to rule clustering", async () => {
-  const engine = new TrackingSessionEngine(await loadTechniquePackage("jab"));
+test("model-enabled temporal packages do not fall back to rule clustering", async () => {
+  const source = await loadTechniqueSource(techniqueRoot, "jab");
+  source.manifest.temporal_inference.source = "onnx";
+  const engine = new TrackingSessionEngine(createTechniquePackage(source));
 
   const warmingFrames = [0, 40, 80, 120].map((timestampMs) =>
     engine.updateFeatures({
@@ -97,6 +99,51 @@ test("model-enabled Jab does not fall back to rule clustering", async () => {
   );
   assert.equal(learnedFrames.at(-1).step, "GUARD");
   assert.equal(learnedFrames.at(-1).learned_model_mode, "primary");
+});
+
+test("catalog rule mode keeps Jab independent from learned predictions", async () => {
+  const engine = new TrackingSessionEngine(
+    await loadTechniquePackage("jab"),
+    { mode: "practice" }
+  );
+  const frames = [0, 40, 80, 120].map((timestampMs) =>
+    engine.updateFeatures({
+      timestampMs,
+      features: JAB.guard,
+      trackingConfidence: 0.96,
+      learnedModelExpected: true,
+      learnedStatePrediction: {
+        state: "FULL_EXTENSION",
+        confidence: 0.99,
+        probabilities: { FULL_EXTENSION: 0.99 }
+      }
+    })
+  );
+
+  assert.equal(frames.at(-1).step, "GUARD");
+  assert.equal(frames.at(-1).canonical_phase, "PREPARATION");
+  assert.equal(frames.at(-1).learned_model_mode, "disabled_by_technique");
+  assert.equal(frames.at(-1).temporal_inference_source, "rules");
+});
+
+test("catalog rule mode normalizes the Jab entry transition", async () => {
+  const engine = new TrackingSessionEngine(
+    await loadTechniquePackage("jab"),
+    { mode: "practice" }
+  );
+  feed(engine, [0, 40, 80, 120], JAB.guard);
+
+  const entryCandidate = feed(engine, [300], JAB.extension).at(-1);
+  assert.equal(entryCandidate.step, "GUARD");
+  assert.equal(entryCandidate.canonical_phase, "ENTRY");
+
+  const entryConfirmed = feed(engine, [360], JAB.extension).at(-1);
+  assert.equal(entryConfirmed.step, "EXTENSION");
+  assert.equal(entryConfirmed.canonical_phase, "ENTRY");
+
+  const execution = feed(engine, [400], JAB.extension).at(-1);
+  assert.equal(execution.step, "EXTENSION");
+  assert.equal(execution.canonical_phase, "EXECUTION");
 });
 
 test("whole-session engine produces repetition boundaries and final summary", async () => {
@@ -129,6 +176,7 @@ test("whole-session engine produces repetition boundaries and final summary", as
     trackingConfidence: 0.2
   });
   assert.equal(lost.session_state, SESSION_STATES.TRACKING_LOST);
+  assert.equal(lost.canonical_phase, "__TRACKING_LOST__");
   const recovered = engine.updateFeatures({
     timestampMs: 1120,
     features: JAB.guard,

@@ -65,6 +65,7 @@ function compactFrame(frame) {
     rep_state: frame.rep_state,
     step: frame.step,
     phase: frame.phase,
+    canonical_phase: frame.canonical_phase,
     confidence: frame.confidence,
     tracking_lost: frame.tracking_lost,
     unknown_movement: frame.unknown_movement,

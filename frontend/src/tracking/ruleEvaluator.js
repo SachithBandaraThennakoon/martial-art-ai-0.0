@@ -20,12 +20,18 @@ function evaluateLeaf(condition, features, context) {
   let satisfied = false;
   let score = 0;
   let margin = null;
+  const configuredTarget = finite(condition.value);
+  const configuredMin = finite(condition.min);
+  const configuredMax = finite(condition.max);
 
   if (actual === null) {
     return {
       type: "condition",
       feature: condition.feature,
       operator: condition.operator,
+      value: configuredTarget,
+      min: configuredMin,
+      max: configuredMax,
       actual: null,
       satisfied: false,
       score: 0,
@@ -103,6 +109,9 @@ function evaluateLeaf(condition, features, context) {
     type: "condition",
     feature: condition.feature,
     operator: condition.operator,
+    value: configuredTarget,
+    min: configuredMin,
+    max: configuredMax,
     actual,
     satisfied,
     score: Number(clamp(score).toFixed(3)),

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ActionSkeletonOverlay from "../components/ActionSkeletonOverlay";
 import AdminPracticeDiagnostics from "../components/AdminPracticeDiagnostics";
 import DataLayersPanel from "../components/DataLayersPanel";
+import DiagnosticTraceControls from "../components/DiagnosticTraceControls";
 import Level1DebugPanel from "../components/Level1DebugPanel";
 import Level2DebugPanel from "../components/Level2DebugPanel";
 import SkeletonCanvas from "../components/SkeletonCanvas";
@@ -11,6 +12,10 @@ import {
 } from "../data/techniqueCatalog";
 import { API_BASE_URL } from "../services/api";
 import { authFetch, getAccessToken } from "../services/authSession";
+import {
+  createDiagnosticTraceRecorder,
+  downloadDiagnosticTrace
+} from "../services/diagnosticTraceRecorder";
 import {
   createBrowserAudio,
   playBrowserAudio,
@@ -40,6 +45,11 @@ import {
   selectPracticeTimelineView
 } from "../utils/practiceSessionAnalysis";
 import {
+  getPracticeCueDeadlineMs,
+  getPracticeCueDelayMs,
+  summarizePracticeSourceTiming
+} from "../utils/practiceTiming";
+import {
   selectLatestPracticeSession,
   sortPracticeSessions
 } from "../utils/practiceSessionSelectors";
@@ -56,6 +66,7 @@ const PRACTICE_POST_ROLL_MS = 700;
 const PRACTICE_FINAL_ANALYSIS_GRACE_MS = 4000;
 const LOCAL_SESSION = { id: null, status: "active" };
 const PRACTICE_VOICE_GENDER = "male";
+const DIAGNOSTIC_TRACE_ENABLED = import.meta.env.DEV;
 const TAPE_CONNECTIONS = [
   [0, 11], [0, 12], [11, 12], [11, 13], [13, 15], [12, 14], [14, 16],
   [11, 23], [12, 24], [23, 24], [23, 25], [25, 27], [24, 26], [26, 28]
@@ -434,14 +445,20 @@ const analyzePracticeTape = ({
   steps,
   targetReps,
   countMarkers,
-  countGapMs
+  countGapMs,
+  classificationArmedAtElapsedMs = 0,
+  recoveryAngleKey = null
 }) => {
   const completedTape = buildThirtyFpsTape(sourceFrames, durationMs);
+  const classificationTape = completedTape.filter(
+    (frame) => frame.elapsedMs >= classificationArmedAtElapsedMs
+  );
   const countStepIndex = steps.findIndex((step) => step.counts_rep);
-  const reclassifiedTape = reclassifyPracticeSequence(completedTape, {
+  const reclassifiedTape = reclassifyPracticeSequence(classificationTape, {
     countStep: countStepIndex >= 0 ? countStepIndex + 1 : undefined,
     stepCount: steps.length,
-    targetReps
+    targetReps,
+    recoveryAngleKey
   });
   const rescoredTape = reclassifiedTape.map((frame) => {
     const numericStepScores = (frame.stepScores || []).map(
@@ -1010,8 +1027,9 @@ function PracticeSessionMap({
             {showAdvancedTimeline ? "Hide advanced" : "Advanced frames"}
           </button>
           <span>
-            {analysis.clustered_completed_repetitions}/
-            {analysis.target_repetitions} completed
+            Clusters {analysis.clustered_completed_repetitions}/
+            {analysis.target_repetitions} · Verified {analysis.strict_verified_repetitions}/
+            {analysis.target_repetitions}
           </span>
         </div>
       </div>
@@ -1212,6 +1230,10 @@ export default function PracticeMode({
     }),
     [currentTechnique?.name]
   );
+  const trackingPackage = useMemo(
+    () => getTechniqueTrackingPackage(currentTechnique),
+    [currentTechnique]
+  );
   const steps = useMemo(() => currentTechnique?.steps || [], [currentTechnique]);
   const [selectedStepIndex, setSelectedStepIndex] = useState(0);
   const selectedStep = steps[selectedStepIndex] || steps[0];
@@ -1284,6 +1306,8 @@ export default function PracticeMode({
   const [historySessionPopup, setHistorySessionPopup] = useState(null);
   const [sessionSortDirection, setSessionSortDirection] = useState("desc");
   const [recoveryRemainingMs, setRecoveryRemainingMs] = useState(0);
+  const [diagnosticTraceActive, setDiagnosticTraceActive] = useState(false);
+  const [diagnosticTraceCount, setDiagnosticTraceCount] = useState(0);
   const ruleEngineResultRef = useRef(null);
   const ruleEngineWaitersRef = useRef(new Set());
   const handleRuleEngineSessionComplete = useCallback((summary) => {
@@ -1385,6 +1409,8 @@ export default function PracticeMode({
   const sessionRef = useRef(null);
   const repCountRef = useRef(0);
   const cueCountRef = useRef(0);
+  const countScheduleStartedAtRef = useRef(null);
+  const classificationArmedAtElapsedMsRef = useRef(0);
   const isReadyForRepRef = useRef(true);
   const countBeatRef = useRef(null);
   const countBeatTimersRef = useRef([]);
@@ -1406,6 +1432,7 @@ export default function PracticeMode({
   });
   const completedMovementRepsRef = useRef(new Set());
   const completeMovementRepRef = useRef(null);
+  const pendingRepWritesRef = useRef(new Set());
   const recordFrameRef = useRef(null);
   const numberAudioRef = useRef([]);
   const recognitionRef = useRef(null);
@@ -1421,6 +1448,17 @@ export default function PracticeMode({
   const attentionReminderTimerRef = useRef(null);
   const lastPracticeFeedbackIntentRef = useRef("");
   const lastPracticeSpokenIntentRef = useRef("");
+  const diagnosticContextRef = useRef({});
+  const latestDiagnosticFrameRef = useRef(null);
+  const lastDiagnosticCountUiAtRef = useRef(0);
+  const lastDiagnosticTemporalEventRef = useRef("");
+  const lastDiagnosticCueRef = useRef(0);
+  const lastDiagnosticRepRef = useRef(0);
+  const lastDiagnosticSessionStatusRef = useRef(null);
+  const diagnosticRecorderRef = useRef(null);
+  if (DIAGNOSTIC_TRACE_ENABLED && !diagnosticRecorderRef.current) {
+    diagnosticRecorderRef.current = createDiagnosticTraceRecorder();
+  }
 
   const tapeAnalysisSteps = analysisTapeMetadata?.steps?.length
     ? analysisTapeMetadata.steps
@@ -1543,6 +1581,10 @@ export default function PracticeMode({
     : Number.isFinite(correctedRuleSummary?.completed_repetitions)
       ? correctedRuleSummary.completed_repetitions
     : popupRepTape.length;
+  const hasStrictRuleAnalysis = Boolean(analysisTapeMetadata?.ruleEngineAnalysis);
+  const strictVerifiedReps = hasStrictRuleAnalysis
+    ? canonicalSessionAnalysis.strict_verified_repetitions
+    : null;
   const fullTapeReviewFrames = analysisTapeFrames.filter(
     (frame) =>
       frame.scorable === true &&
@@ -1596,6 +1638,223 @@ export default function PracticeMode({
       : "Repeat once with your full body visible so every angle can be measured.";
 
   selectedStepIndexRef.current = selectedStepIndex;
+
+  diagnosticContextRef.current = {
+    compositeForm: {
+      accuracy,
+      coverage: latestMovementClassificationRef.current.scorable ? 100 : 0,
+      scorable: latestMovementClassificationRef.current.scorable,
+      corrections: [],
+      strengths: []
+    },
+    level1State,
+    level2State,
+    level3State,
+    level4State,
+    ruleEngineFrame: ruleEngineLiveFrame,
+    situationAwarenessState,
+    step: {
+      id: selectedStep?.id || null,
+      index: selectedStepIndex,
+      name: selectedStep?.step_name || null
+    },
+    session: {
+      id: session?.id || null,
+      active: isPracticeActive,
+      state: session?.status || "ready",
+      target_reps: targetReps,
+      completed_reps: repCount,
+      cue_count: cueCount
+    },
+    targets: practiceFeedbackParts,
+    liveAngles: latestHolisticFrameRef.current?.angles || {},
+    practice: {
+      classifier: latestMovementClassificationRef.current,
+      scoring: latestPracticeResultRef.current,
+      counters: {
+        cue_count: cueCount,
+        rep_count: repCount,
+        target_reps: targetReps,
+        count_gap_ms: countGapMs,
+        recovery_remaining_ms: Math.round(recoveryRemainingMs)
+      },
+      inference: {
+        source:
+          ruleEngineLiveFrame?.temporal_inference_source ||
+          trackingPackage?.getTemporalInferenceSource?.() ||
+          "auto",
+        canonical_phase: ruleEngineLiveFrame?.canonical_phase || null,
+        learned_model_mode: ruleEngineLiveFrame?.learned_model_mode || null
+      }
+    },
+    voice: {
+      enabled: voiceEnabled,
+      input_status: voiceInputStatus,
+      is_listening: isListening,
+      is_speaking: isSpeakingRef.current
+    }
+  };
+
+  const syncDiagnosticTraceCount = useCallback((force = false) => {
+    const now = performance.now();
+    if (!force && now - lastDiagnosticCountUiAtRef.current < 1000) return;
+    lastDiagnosticCountUiAtRef.current = now;
+    setDiagnosticTraceCount(diagnosticRecorderRef.current?.size() || 0);
+  }, []);
+
+  const startDiagnosticTrace = useCallback(() => {
+    if (!diagnosticRecorderRef.current) return;
+    diagnosticRecorderRef.current.start({
+      app: "XMartialArt Studio",
+      input_source: inputSource,
+      mode: "practice",
+      performance_mode: performanceMode,
+      performance_profile: performanceProfile,
+      technique: currentTechnique?.name || selectedTechniqueName || "unknown",
+      technique_id: currentTechnique?.id || null,
+      temporal_inference_source:
+        trackingPackage?.getTemporalInferenceSource?.() || "auto",
+      target_reps: targetReps,
+      count_gap_ms: countGapMs
+    });
+    lastDiagnosticTemporalEventRef.current = ruleEngineLiveFrame?.temporal_event?.id || "";
+    lastDiagnosticCueRef.current = cueCount;
+    lastDiagnosticRepRef.current = repCount;
+    lastDiagnosticSessionStatusRef.current = session?.status || "ready";
+    setDiagnosticTraceActive(true);
+    syncDiagnosticTraceCount(true);
+  }, [
+    countGapMs,
+    cueCount,
+    currentTechnique,
+    inputSource,
+    performanceMode,
+    performanceProfile,
+    repCount,
+    ruleEngineLiveFrame?.temporal_event?.id,
+    selectedTechniqueName,
+    session?.status,
+    syncDiagnosticTraceCount,
+    targetReps,
+    trackingPackage
+  ]);
+
+  const stopDiagnosticTrace = useCallback(() => {
+    diagnosticRecorderRef.current?.stop();
+    setDiagnosticTraceActive(false);
+    syncDiagnosticTraceCount(true);
+  }, [syncDiagnosticTraceCount]);
+
+  const clearDiagnosticTrace = useCallback(() => {
+    diagnosticRecorderRef.current?.clear();
+    setDiagnosticTraceActive(false);
+    setDiagnosticTraceCount(0);
+  }, []);
+
+  const downloadTrace = useCallback(() => {
+    if (diagnosticRecorderRef.current) {
+      downloadDiagnosticTrace(diagnosticRecorderRef.current);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!DIAGNOSTIC_TRACE_ENABLED || !diagnosticTraceActive) return undefined;
+    const capture = () => {
+      const latest = latestDiagnosticFrameRef.current || {};
+      const context = diagnosticContextRef.current;
+      try {
+        const accepted = diagnosticRecorderRef.current?.frame({
+          ...latest,
+          timestamp: performance.now(),
+          angles: latest.angles || context.liveAngles,
+          trackingConfidence:
+            latest.trackingConfidence ?? context.level1State?.tracking?.confidence
+        }, {
+          ...context,
+          practice: {
+            ...context.practice,
+            classifier: latestMovementClassificationRef.current,
+            scoring: latestPracticeResultRef.current
+          }
+        });
+        if (accepted) syncDiagnosticTraceCount();
+      } catch (error) {
+        diagnosticRecorderRef.current?.event("diagnostic_capture_error", {
+          message: error?.message || "Practice diagnostic capture failed"
+        });
+      }
+    };
+    capture();
+    const timer = window.setInterval(capture, 200);
+    return () => window.clearInterval(timer);
+  }, [diagnosticTraceActive, syncDiagnosticTraceCount]);
+
+  useEffect(() => {
+    if (!DIAGNOSTIC_TRACE_ENABLED || !diagnosticTraceActive) return;
+    const event = ruleEngineLiveFrame?.temporal_event;
+    if (!event?.id || event.id === lastDiagnosticTemporalEventRef.current) return;
+    lastDiagnosticTemporalEventRef.current = event.id;
+    if (diagnosticRecorderRef.current?.event("temporal_transition", {
+      step: diagnosticContextRef.current.step,
+      canonical_phase: ruleEngineLiveFrame.canonical_phase || null,
+      inference_source: ruleEngineLiveFrame.temporal_inference_source || null,
+      learned_model_mode: ruleEngineLiveFrame.learned_model_mode || null,
+      transition: event,
+      state: ruleEngineLiveFrame.step || null,
+      confidence: ruleEngineLiveFrame.confidence ?? null,
+      state_scores: ruleEngineLiveFrame.state_scores || {},
+      rule_evidence: ruleEngineLiveFrame.rule_evidence || null
+    })) syncDiagnosticTraceCount();
+  }, [diagnosticTraceActive, ruleEngineLiveFrame, syncDiagnosticTraceCount]);
+
+  useEffect(() => {
+    if (!DIAGNOSTIC_TRACE_ENABLED || !diagnosticTraceActive) return;
+    if (cueCount !== lastDiagnosticCueRef.current) {
+      lastDiagnosticCueRef.current = cueCount;
+      if (diagnosticRecorderRef.current?.event("count_cue", {
+        cue: cueCount,
+        target_reps: targetReps,
+        count_gap_ms: countGapMs,
+        step: diagnosticContextRef.current.step
+      })) syncDiagnosticTraceCount();
+    }
+    if (repCount !== lastDiagnosticRepRef.current) {
+      lastDiagnosticRepRef.current = repCount;
+      if (diagnosticRecorderRef.current?.event("movement_rep_completed", {
+        rep: repCount,
+        target_reps: targetReps,
+        scoring: latestPracticeResultRef.current,
+        classifier: latestMovementClassificationRef.current,
+        step: diagnosticContextRef.current.step
+      })) syncDiagnosticTraceCount();
+    }
+    const status = session?.status || "ready";
+    if (status !== lastDiagnosticSessionStatusRef.current) {
+      lastDiagnosticSessionStatusRef.current = status;
+      if (diagnosticRecorderRef.current?.event("practice_session_state", {
+        status,
+        session_id: session?.id || null,
+        cue_count: cueCount,
+        rep_count: repCount,
+        target_reps: targetReps
+      })) syncDiagnosticTraceCount();
+    }
+  }, [
+    countGapMs,
+    cueCount,
+    diagnosticTraceActive,
+    repCount,
+    session?.id,
+    session?.status,
+    syncDiagnosticTraceCount,
+    targetReps
+  ]);
+
+  useEffect(() => () => {
+    if (diagnosticRecorderRef.current?.isActive()) {
+      diagnosticRecorderRef.current.stop("component_unmounted");
+    }
+  }, []);
 
   const syncTimelineScroll = useCallback((source, targetRef) => {
     if (timelineScrollSyncRef.current || !targetRef.current) return;
@@ -1684,6 +1943,9 @@ export default function PracticeMode({
   }, []);
 
   const handleLandmarkFrame = useCallback((frame) => {
+    if (DIAGNOSTIC_TRACE_ENABLED) {
+      latestDiagnosticFrameRef.current = frame;
+    }
     latestLandmarksRef.current = frame?.pose || [];
     latestHolisticFrameRef.current = frame || {
       facePoints: [],
@@ -1710,7 +1972,11 @@ export default function PracticeMode({
     const classification = movementClassifierRef.current.update({
       motionScore: frame?.motionEnergy || 0,
       stepScores,
-      trackingConfidence: frame?.trackingConfidence
+      trackingConfidence: frame?.trackingConfidence,
+      timestampMs: Number.isFinite(Number(frame?.timestamp))
+        ? Number(frame.timestamp)
+        : performance.now(),
+      angles: frame?.angles || null
     });
     latestMovementClassificationRef.current = {
       rep: classification.rep,
@@ -1730,18 +1996,24 @@ export default function PracticeMode({
     }
 
     if (classification.countedRep) {
-      repCountRef.current = classification.countedRep;
-      setRepCount(classification.countedRep);
+      // Impact is useful for cue-response timing, but a visible repetition is
+      // not complete until the recovery transition returns to Guard.
       setTapeCursor(classification.countedRep - 1);
     }
 
     if (classification.completedRep) {
       recordFrameRef.current?.();
       window.setTimeout(() => {
-        completeMovementRepRef.current?.(
+        const pendingWrite = completeMovementRepRef.current?.(
           classification.completedRep,
           performance.now()
         );
+        if (pendingWrite?.finally) {
+          pendingRepWritesRef.current.add(pendingWrite);
+          void pendingWrite.finally(() => {
+            pendingRepWritesRef.current.delete(pendingWrite);
+          });
+        }
       }, 0);
     }
   }, [steps]);
@@ -1801,7 +2073,12 @@ export default function PracticeMode({
     }
   }, [voiceEnabled]);
 
-  const playPracticeAudio = useCallback(async (message, data, requestId) => {
+  const playPracticeAudio = useCallback(async (
+    message,
+    data,
+    requestId,
+    { onStarted } = {}
+  ) => {
     if (!data || requestId !== voiceRequestIdRef.current) return;
 
     const playback = createBrowserAudio(data);
@@ -1821,7 +2098,9 @@ export default function PracticeMode({
 
       audio.onended = finish;
       audio.onerror = finish;
-      playBrowserAudio(audio).catch(finish);
+      playBrowserAudio(audio)
+        .then(() => onStarted?.(performance.now()))
+        .catch(finish);
     });
   }, []);
 
@@ -1966,6 +2245,11 @@ export default function PracticeMode({
     status = "completed",
     correctedSummary = null
   ) => {
+    // A final movement can finish only a few milliseconds before this path.
+    // Do not close the session while its asynchronous rep write is in flight.
+    if (pendingRepWritesRef.current.size) {
+      await Promise.allSettled([...pendingRepWritesRef.current]);
+    }
     const activeSession = sessionRef.current;
     const token = getAccessToken();
     if (!activeSession?.id || !token) {
@@ -2189,11 +2473,22 @@ export default function PracticeMode({
     if (nextCue > targetReps) return;
 
     const countStartedAt = performance.now();
+    if (!Number.isFinite(countScheduleStartedAtRef.current)) {
+      countScheduleStartedAtRef.current = countStartedAt;
+    }
     cueCountRef.current = nextCue;
-    countMarkersRef.current.push({
+    const marker = {
       cue: nextCue,
-      elapsedMs: Math.round(countStartedAt - (setStartedAtRef.current || countStartedAt))
-    });
+      elapsedMs: Math.round(countStartedAt - (setStartedAtRef.current || countStartedAt)),
+      scheduledElapsedMs: Math.round(
+        getPracticeCueDeadlineMs({
+          scheduleStartedAtMs: countScheduleStartedAtRef.current,
+          cueNumber: nextCue,
+          countGapMs
+        }) - (setStartedAtRef.current || countStartedAt)
+      )
+    };
+    countMarkersRef.current.push(marker);
     setCueCount(nextCue);
     setTemporalCue({ cue: nextCue, timestampMs: countStartedAt });
     setAssistantMessage(String(nextCue));
@@ -2201,20 +2496,39 @@ export default function PracticeMode({
       appendConversation({ role: "ai", text: String(nextCue) });
     }
 
-    recoveryEndsAtRef.current = countStartedAt + countGapMs;
-    setRecoveryRemainingMs(countGapMs);
+    const nextDeadline = getPracticeCueDeadlineMs({
+      scheduleStartedAtMs: countScheduleStartedAtRef.current,
+      cueNumber: nextCue + 1,
+      countGapMs
+    });
+    recoveryEndsAtRef.current = nextDeadline;
+    setRecoveryRemainingMs(Math.max(0, nextDeadline - countStartedAt));
 
     if (voiceEnabled) {
       playPracticeAudio(
         String(nextCue),
         numberAudioRef.current[nextCue - 1],
-        voiceRequestIdRef.current
+        voiceRequestIdRef.current,
+        {
+          onStarted: (audioStartedAt) => {
+            const captureStart = setStartedAtRef.current || audioStartedAt;
+            marker.audioStartedElapsedMs = Math.round(audioStartedAt - captureStart);
+            marker.audioStartLatencyMs = Math.round(audioStartedAt - countStartedAt);
+            marker.elapsedMs = marker.audioStartedElapsedMs;
+          }
+        }
       );
     }
     if (nextCue < targetReps) {
+      const delayMs = getPracticeCueDelayMs({
+        nowMs: performance.now(),
+        scheduleStartedAtMs: countScheduleStartedAtRef.current,
+        cueNumber: nextCue + 1,
+        countGapMs
+      });
       const intervalTimerId = window.setTimeout(() => {
         countBeatRef.current?.();
-      }, countGapMs);
+      }, delayMs);
       countBeatTimersRef.current = [intervalTimerId];
     } else {
       const finalResponseTimerId = window.setTimeout(async () => {
@@ -2235,7 +2549,13 @@ export default function PracticeMode({
           steps,
           targetReps,
           countMarkers: countMarkersRef.current,
-          countGapMs
+          countGapMs,
+          classificationArmedAtElapsedMs:
+            classificationArmedAtElapsedMsRef.current,
+          recoveryAngleKey:
+            currentTechnique?.name?.trim().toLowerCase() === "jab"
+              ? "elbow_left"
+              : null
         });
         const correctedAnalysis = buildPracticeSessionAnalysis(analyzedTape, {
           steps,
@@ -2267,9 +2587,26 @@ export default function PracticeMode({
           correctedSummary,
           captureWindow: {
             startedAt: "start_button",
+            classificationArmedAtElapsedMs:
+              classificationArmedAtElapsedMsRef.current,
             endedAfterFinalCueMs:
               countGapMs + PRACTICE_FINAL_ANALYSIS_GRACE_MS,
-            countUsedForSegmentation: false
+            countUsedForSegmentation: false,
+            cueSchedule: countMarkersRef.current.map((countMarker) => ({
+              cue: countMarker.cue,
+              scheduledElapsedMs: countMarker.scheduledElapsedMs,
+              dispatchedElapsedMs: countMarker.audioStartedElapsedMs == null
+                ? countMarker.elapsedMs
+                : countMarker.elapsedMs - countMarker.audioStartLatencyMs,
+              audioStartedElapsedMs: countMarker.audioStartedElapsedMs ?? null,
+              audioStartLatencyMs: countMarker.audioStartLatencyMs ?? null
+            })),
+            sourceTiming: summarizePracticeSourceTiming(
+              recordedFramesRef.current.filter(
+                (frame) =>
+                  frame.elapsedMs >= classificationArmedAtElapsedMsRef.current
+              )
+            )
           },
           captureMarginsMs: {
             before: PRACTICE_PRE_ROLL_MS,
@@ -2332,7 +2669,14 @@ export default function PracticeMode({
           speak: true
         });
         isSetFinishingRef.current = false;
-      }, countGapMs + PRACTICE_FINAL_ANALYSIS_GRACE_MS);
+      }, Math.max(
+        0,
+        getPracticeCueDeadlineMs({
+          scheduleStartedAtMs: countScheduleStartedAtRef.current,
+          cueNumber: targetReps + 1,
+          countGapMs
+        }) + PRACTICE_FINAL_ANALYSIS_GRACE_MS - performance.now()
+      ));
       countBeatTimersRef.current = [finalResponseTimerId];
     }
   }, [
@@ -2487,14 +2831,11 @@ export default function PracticeMode({
     previousRecordedLandmarksRef.current = [];
     repCountRef.current = 0;
     cueCountRef.current = 0;
-    movementClassifierRef.current = createPracticeMovementClassifier({
-      countStep:
-        steps.findIndex((step) => step.counts_rep) >= 0
-          ? steps.findIndex((step) => step.counts_rep) + 1
-          : undefined,
-      stepCount: steps.length,
-      targetReps
-    });
+    countScheduleStartedAtRef.current = null;
+    classificationArmedAtElapsedMsRef.current = 0;
+    // The diagnostic recorder starts at the button press, but movement
+    // classification is deliberately unarmed until spoken setup has ended.
+    movementClassifierRef.current = null;
     latestMovementClassificationRef.current = {
       rep: 1,
       step: 1,
@@ -2525,6 +2866,42 @@ export default function PracticeMode({
     sayPractice(setupMessage, { intent: setupIntent, speak: false });
     beginWholeSessionCapture();
 
+    if (token) {
+      void (async () => {
+        try {
+          const response = await authFetch(`${API_BASE_URL}/practice/sessions`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              technique_name: currentTechnique.name,
+              step_key: "full_sequence",
+              step_name: `${currentTechnique.name}: ${steps
+                .map((step) => step.step_name)
+                .join(" → ")}`,
+              target_reps: targetReps
+            })
+          });
+
+          if (
+            response.ok &&
+            requestId === voiceRequestIdRef.current &&
+            sessionRef.current?.status === "active"
+          ) {
+            const data = await response.json();
+            setSession(data);
+            sessionRef.current = data;
+          }
+        } catch {
+          sayPractice("Practice started locally. Analysis storage is offline.", {
+            log: false
+          });
+        }
+      })();
+    }
+
     numberAudioRef.current = voiceEnabled
       ? await Promise.all(
           Array.from({ length: targetReps }, (_, index) =>
@@ -2541,6 +2918,31 @@ export default function PracticeMode({
       clearCountBeatTimers();
       return;
     }
+    movementClassifierRef.current = createPracticeMovementClassifier({
+      countStep:
+        steps.findIndex((step) => step.counts_rep) >= 0
+          ? steps.findIndex((step) => step.counts_rep) + 1
+          : undefined,
+      stepCount: steps.length,
+      targetReps,
+      recoveryAngleKey:
+        currentTechnique?.name?.trim().toLowerCase() === "jab"
+          ? "elbow_left"
+          : null
+    });
+    latestMovementClassificationRef.current = {
+      rep: 1,
+      step: 1,
+      phase: "transition",
+      temporalPhase: "waiting_for_movement",
+      stateConfidence: 0,
+      trackingReliable: true,
+      scorable: false
+    };
+    classificationArmedAtElapsedMsRef.current = Math.max(
+      0,
+      performance.now() - (setStartedAtRef.current || performance.now())
+    );
     await new Promise((resolve) => window.setTimeout(resolve, PRACTICE_PRE_ROLL_MS));
     if (requestId !== voiceRequestIdRef.current) {
       clearCountBeatTimers();
@@ -2549,36 +2951,6 @@ export default function PracticeMode({
     setIsReadyForRep(true);
     isReadyForRepRef.current = true;
     countBeatRef.current?.();
-
-    if (!token) return;
-
-    try {
-      const response = await authFetch(`${API_BASE_URL}/practice/sessions`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          technique_name: currentTechnique.name,
-          step_key: "full_sequence",
-          step_name: `${currentTechnique.name}: ${steps
-            .map((step) => step.step_name)
-            .join(" → ")}`,
-          target_reps: targetReps
-        })
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setSession(data);
-        sessionRef.current = data;
-      }
-    } catch {
-      sayPractice("Practice started locally. Analysis storage is offline.", {
-        log: false
-      });
-    }
   }, [
     beginWholeSessionCapture,
     clearCountBeatTimers,
@@ -3146,7 +3518,9 @@ export default function PracticeMode({
           onLevel4Update={setLevel4State}
           onSituationAwarenessUpdate={setSituationAwarenessState}
           onRuleEngineFrameUpdate={
-            isAdminStudio ? handleRuleEngineLiveFrame : undefined
+            isAdminStudio || DIAGNOSTIC_TRACE_ENABLED
+              ? handleRuleEngineLiveFrame
+              : undefined
           }
           onRuleEngineSessionComplete={handleRuleEngineSessionComplete}
           onAccuracyUpdate={() => {}}
@@ -3382,6 +3756,18 @@ export default function PracticeMode({
           </p>
         </div>
 
+        {DIAGNOSTIC_TRACE_ENABLED ? (
+          <DiagnosticTraceControls
+            active={diagnosticTraceActive}
+            description="Captures compact landmarks and angles at 5 Hz, plus the Jab rule classifier, evidence scores, canonical phases, transitions, cues, reps, and the full analysis pipeline every second. No camera video is stored."
+            recordCount={diagnosticTraceCount}
+            onClear={clearDiagnosticTrace}
+            onDownload={downloadTrace}
+            onStart={startDiagnosticTrace}
+            onStop={stopDiagnosticTrace}
+          />
+        ) : null}
+
         {isAdminStudio ? (
           <>
             <div className="panel-block">
@@ -3611,7 +3997,11 @@ export default function PracticeMode({
             <div>
               <p className="eyebrow">Full session analysis</p>
               <strong>
-                {displayedCompletedReps}/{tapeTargetReps} reps ·{" "}
+                Movement clusters {displayedCompletedReps}/{tapeTargetReps}
+                {hasStrictRuleAnalysis
+                  ? ` · Rule verified ${strictVerifiedReps}/${tapeTargetReps}`
+                  : ""}
+                {" · "}
                 {formatTapeTime(fullTapeDurationMs)}
               </strong>
               <small>Device-generated coaching estimate — not an independently validated performance score.</small>
@@ -3635,9 +4025,19 @@ export default function PracticeMode({
             </div>
           </div>
 
-          {isAdminStudio ? (
+          {(hasStrictRuleAnalysis && strictVerifiedReps < displayedCompletedReps) || isAdminStudio ? (
             <div className="practice-tape-popup__notices">
-            {analysisTapeMetadata?.analysisTrust === "legacy_live" ? (
+              {hasStrictRuleAnalysis && strictVerifiedReps < displayedCompletedReps ? (
+                <div className="practice-session-analysis__finding is-warning" role="status">
+                  <span>Movement detected, strict Jab not verified</span>
+                  <strong>
+                    The tape contains {displayedCompletedReps} movement clusters, but only{" "}
+                    {strictVerifiedReps} completed the configured Guard → Extension → Peak →
+                    Retraction → Recovery rule sequence. Cluster count is not a verified rep count.
+                  </strong>
+                </div>
+              ) : null}
+            {isAdminStudio && analysisTapeMetadata?.analysisTrust === "legacy_live" ? (
               <div className="practice-session-analysis__finding is-warning" role="status">
                 <span>Legacy session</span>
                 <strong>
@@ -3647,7 +4047,7 @@ export default function PracticeMode({
               </div>
             ) : null}
 
-            {analysisTapeMetadata?.analysisTrust === "legacy_trimmed" ? (
+            {isAdminStudio && analysisTapeMetadata?.analysisTrust === "legacy_trimmed" ? (
               <div className="practice-session-analysis__finding is-warning" role="status">
                 <span>Earlier frame organization</span>
                 <strong>
@@ -3658,7 +4058,7 @@ export default function PracticeMode({
               </div>
             ) : null}
 
-            {analysisTapeMetadata?.analysisTrust === "post_session_reanalyzed" ? (
+            {isAdminStudio && analysisTapeMetadata?.analysisTrust === "post_session_reanalyzed" ? (
               <div className="practice-session-analysis__finding" role="status">
                 <span>Legacy tape reanalyzed</span>
                 <strong>
@@ -3668,11 +4068,11 @@ export default function PracticeMode({
               </div>
             ) : null}
 
-            {analysisTapeMetadata?.ruleEngineAnalysis ? (
+            {isAdminStudio && analysisTapeMetadata?.ruleEngineAnalysis ? (
               <div className="practice-session-analysis__finding" role="status">
                 <span>Sequence cluster and strict verification</span>
                 <strong>
-                  Tape cluster: {displayedCompletedReps} completed. Strict rules:{" "}
+                  Movement clusters: {displayedCompletedReps} detected. Strict rules:{" "}
                   {analysisTapeMetadata.ruleEngineAnalysis.summary.completed_repetitions} verified,
                   {" "}
                   {analysisTapeMetadata.ruleEngineAnalysis.summary.aborted_repetitions} incomplete,
@@ -3863,7 +4263,15 @@ export default function PracticeMode({
                   </strong>
                 </span>
                 <span>
-                  <small>Rule phase</small>
+                  <small>Canonical phase</small>
+                  <strong>
+                    {correctedFrameState?.canonical_phase
+                      ? correctedFrameState.canonical_phase
+                      : "__UNKNOWN__"}
+                  </strong>
+                </span>
+                <span>
+                  <small>State transition</small>
                   <strong>
                     {correctedFrameState?.phase
                       ? formatBodyPart(correctedFrameState.phase)

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import { API_BASE_URL } from "../services/api";
+import { getApiErrorMessage } from "../services/apiError";
 import AuthStory from "../components/AuthStory";
 
 export default function Register() {
@@ -15,6 +16,7 @@ export default function Register() {
   const [legalDocuments, setLegalDocuments] = useState(null);
   const [acceptPrivacy, setAcceptPrivacy] = useState(false);
   const [acceptTerms, setAcceptTerms] = useState(false);
+  const [confirmMinimumAge, setConfirmMinimumAge] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -44,12 +46,16 @@ export default function Register() {
           terms_version: legalDocuments?.terms_version || "",
           accept_privacy: String(acceptPrivacy),
           accept_terms: String(acceptTerms),
+          confirm_minimum_age: String(confirmMinimumAge),
         })
       });
       const data = await response.json().catch(() => ({}));
 
       if (!response.ok || !data.message) {
-        setError(data.detail || "We couldn’t create your account. Please try again.");
+        setError(getApiErrorMessage(
+          data.detail,
+          "We couldn’t create your account. Please try again."
+        ));
         return;
       }
 
@@ -100,13 +106,14 @@ export default function Register() {
         </label>
 
         <div className="auth-consents">
+          <label><input checked={confirmMinimumAge} onChange={(event) => setConfirmMinimumAge(event.target.checked)} required type="checkbox" /> <span>I confirm that I am at least {legalDocuments?.minimum_age || 18} years old.</span></label>
           <label><input checked={acceptPrivacy} onChange={(event) => setAcceptPrivacy(event.target.checked)} required type="checkbox" /> <span>I accept the <Link target="_blank" to="/privacy">privacy notice</Link>.</span></label>
           <label><input checked={acceptTerms} onChange={(event) => setAcceptTerms(event.target.checked)} required type="checkbox" /> <span>I accept the <Link target="_blank" to="/terms">terms of use</Link>.</span></label>
         </div>
 
         {error ? <p className="form-error" role="alert">{error}</p> : null}
 
-        <button className="btn btn--light btn--full" disabled={isSubmitting || !legalDocuments || !acceptPrivacy || !acceptTerms} type="submit">
+        <button className="btn btn--light btn--full" disabled={isSubmitting || !legalDocuments || !confirmMinimumAge || !acceptPrivacy || !acceptTerms} type="submit">
           {isSubmitting ? "Creating your account…" : "Create free account"}
         </button>
         <p className="auth-terms">Train safely, move with purpose, and stay within your physical limits.</p>

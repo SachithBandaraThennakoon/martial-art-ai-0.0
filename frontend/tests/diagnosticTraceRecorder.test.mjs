@@ -58,6 +58,16 @@ test("diagnostic trace synchronizes the reasoning chain without recording every 
         next_action: { command: "correct" },
         feedback_decision: { action: "speak" }
       }
+    },
+    ruleEngineFrame: {
+      step: "jab_extension",
+      canonical_phase: "EXECUTION",
+      temporal_inference_source: "rules",
+      state_scores: { jab_extension: 0.91 }
+    },
+    practice: {
+      classifier: { rep: 1, step: 2, temporalPhase: "execution" },
+      counters: { cue_count: 1, rep_count: 0, target_reps: 5 }
     }
   };
 
@@ -88,6 +98,8 @@ test("diagnostic trace synchronizes the reasoning chain without recording every 
   assert.equal(snapshots[0].layers.level3.context.trend, "stable");
   assert.equal(snapshots[0].reasoning.decision_score, 0.82);
   assert.equal(snapshots[0].plan.command, "correct");
+  assert.equal(snapshots[0].rule_engine.canonical_phase, "EXECUTION");
+  assert.equal(snapshots[0].practice.classifier.temporalPhase, "execution");
   assert.equal(
     pipelineSnapshots[0].pipeline.stage_2_target_comparison.composite_form.accuracy,
     79
@@ -95,6 +107,10 @@ test("diagnostic trace synchronizes the reasoning chain without recording every 
   assert.equal(
     pipelineSnapshots[0].pipeline.stage_6_level3_session.session_context.trend,
     "stable"
+  );
+  assert.equal(
+    pipelineSnapshots[0].pipeline.stage_4a_practice_classifier.counters.target_reps,
+    5
   );
   assert.equal(document.records.some((record) => record.kind === "user_response"), true);
 });

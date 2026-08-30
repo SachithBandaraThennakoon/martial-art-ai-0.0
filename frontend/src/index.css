@@ -8284,6 +8284,48 @@ select:focus {
   background: #60d394;
 }
 
+.admin-live-diagnostics__conditions {
+  display: grid;
+  gap: 5px;
+  padding: 9px;
+  border: 1px solid rgba(96, 211, 148, .18);
+  border-radius: 8px;
+  background: rgba(96, 211, 148, .035);
+}
+
+.admin-live-diagnostics__conditions.is-blocked {
+  border-color: rgba(255, 180, 94, .28);
+  background: rgba(255, 180, 94, .055);
+}
+
+.admin-live-diagnostics__conditions > div {
+  display: grid;
+  grid-template-columns: minmax(88px, 1fr) 50px 60px 48px;
+  gap: 6px;
+  align-items: center;
+  font-size: 9px;
+}
+
+.admin-live-diagnostics__conditions > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  padding-bottom: 5px;
+  border-bottom: 1px solid rgba(255, 255, 255, .07);
+}
+
+.admin-live-diagnostics__conditions span,
+.admin-live-diagnostics__conditions small {
+  color: var(--subtle);
+}
+
+.admin-live-diagnostics__conditions .is-passing > strong {
+  color: #74dfa4;
+}
+
+.admin-live-diagnostics__conditions .is-failing > strong {
+  color: #ffd08c;
+}
+
 .admin-live-diagnostics__awareness {
   display: grid;
   gap: 4px;

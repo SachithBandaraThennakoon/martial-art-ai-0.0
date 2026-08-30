@@ -3,6 +3,7 @@ import { PersistentErrorEvaluator } from "./persistentErrorEvaluator.js";
 import { evaluateRule } from "./ruleEvaluator.js";
 import { SessionTimelineRecorder } from "./sessionTimelineRecorder.js";
 import { postProcessSessionTimeline } from "./sessionTimelinePostProcessor.js";
+import { TEMPORAL_SPECIAL_LABELS } from "./temporalModelContract.js";
 import { TemporalStateMachine } from "./temporalStateMachine.js";
 
 const SESSION_STATES = Object.freeze({
@@ -21,6 +22,7 @@ const REPETITION_STATES = Object.freeze({
   REP_COMPLETED: "REP_COMPLETED",
   REP_ABORTED: "REP_ABORTED"
 });
+const [, UNKNOWN_PHASE, TRACKING_LOST_PHASE] = TEMPORAL_SPECIAL_LABELS;
 
 function average(values) {
   const finiteValues = values.filter(Number.isFinite);
@@ -214,7 +216,12 @@ export class TrackingSessionEngine {
     if (this.sessionState === SESSION_STATES.OUTSIDE_SESSION) this.start();
     this.sessionStartedAtMs ??= timestampMs;
     this.lastTimestampMs = timestampMs;
-    const useLearnedModel = learnedModelExpected || Boolean(learnedStatePrediction);
+    const temporalInferenceSource =
+      this.techniquePackage.getTemporalInferenceSource?.() || "auto";
+    const learnedModelAllowed = temporalInferenceSource !== "rules";
+    const useLearnedModel = learnedModelAllowed && (
+      learnedModelExpected || Boolean(learnedStatePrediction)
+    );
     const stateScores = useLearnedModel
       ? Object.fromEntries(
           this.techniquePackage.stateNames.map((stateName) => [
@@ -359,6 +366,15 @@ export class TrackingSessionEngine {
       rep_state: this.repState,
       step: temporal.state,
       phase: temporal.phase,
+      canonical_phase: temporal.tracking_lost
+        ? TRACKING_LOST_PHASE
+        : temporal.unknown_movement || !temporal.state
+          ? UNKNOWN_PHASE
+          : this.techniquePackage.getCanonicalPhase?.(
+              temporal.state,
+              temporal.event,
+              temporal.candidate_state
+            ) || UNKNOWN_PHASE,
       confidence: temporal.confidence,
       tracking_confidence: trackingConfidence,
       tracking_lost: temporal.tracking_lost,
@@ -379,7 +395,8 @@ export class TrackingSessionEngine {
       learned_state_prediction: learnedStatePrediction,
       learned_model_mode: useLearnedModel
         ? (learnedStatePrediction ? "primary" : "warming_up")
-        : "unavailable",
+        : learnedModelAllowed ? "unavailable" : "disabled_by_technique",
+      temporal_inference_source: useLearnedModel ? "onnx" : "rules",
       rule_evidence: temporal.rule_evidence,
       temporal_event: temporal.event
     };

@@ -35,7 +35,17 @@ test("universal metadata covers the selected technique and native states", () =>
         technique: { labels: ["jab", "front-kick"] }
       },
       output: {
-        labels: ["__UNKNOWN__", "PREPARATION", "PEAK", "RECOVERY"]
+        labels: [
+          "__PAD__",
+          "__UNKNOWN__",
+          "__TRACKING_LOST__",
+          "PREPARATION",
+          "ENTRY",
+          "EXECUTION",
+          "PEAK",
+          "RETRACTION",
+          "RECOVERY"
+        ]
       },
       techniques: {
         jab: {
@@ -51,6 +61,32 @@ test("universal metadata covers the selected technique and native states", () =>
   );
   assert.equal(result.valid, true);
   assert.equal(result.techniqueIndex, 0);
+});
+
+test("universal metadata rejects an incomplete canonical label vocabulary", () => {
+  const result = validateUniversalTemporalMetadata(
+    {
+      model_type: "universal-temporal-phase",
+      inputs: {
+        landmarks: { layout: "BTVC", joints: 33 },
+        technique: { labels: ["jab"] }
+      },
+      output: { labels: ["__UNKNOWN__", "PREPARATION", "RECOVERY"] },
+      techniques: {
+        jab: {
+          phase_to_native: {
+            PREPARATION: "GUARD",
+            RECOVERY: "RECOVERY"
+          }
+        }
+      }
+    },
+    { id: "jab", stateNames: ["GUARD", "RECOVERY"] }
+  );
+
+  assert.equal(result.valid, false);
+  assert.match(result.errors.join(" "), /__PAD__/);
+  assert.match(result.errors.join(" "), /EXECUTION/);
 });
 
 test("deployed universal model metadata covers Jab and Front Kick", async () => {

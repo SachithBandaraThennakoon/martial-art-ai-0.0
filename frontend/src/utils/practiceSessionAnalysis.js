@@ -71,6 +71,7 @@ const DEFAULT_CLUSTER_CONFIG = Object.freeze({
   impact_dominance_margin: 6,
   minimum_impact_frames: 3,
   maximum_impact_gap_frames: 2,
+  maximum_impact_duration_ms: 2500,
   minimum_return_score: 75,
   return_dominance_margin: 5,
   minimum_return_frames: 3,
@@ -129,10 +130,42 @@ function buildScoreDrivenWindows(frames, config = {}) {
     }
     impactRuns.push({ start: index, end: index, confirmed_frames: 1 });
   });
-  const confirmedRuns = impactRuns.filter(
-    (run) =>
-      run.confirmed_frames >= Number(settings.minimum_impact_frames)
+  let confirmedRuns = impactRuns.filter(
+    (run) => {
+      const durationMs = Math.max(
+        0,
+        (Number(frames[run.end]?.elapsedMs) || 0) -
+          (Number(frames[run.start]?.elapsedMs) || 0)
+      );
+      return (
+        run.confirmed_frames >= Number(settings.minimum_impact_frames) &&
+        durationMs <= Number(settings.maximum_impact_duration_ms)
+      );
+    }
   );
+  const maximumRepetitions = Number(settings.maximum_repetitions);
+  if (
+    Number.isInteger(maximumRepetitions) &&
+    maximumRepetitions > 0 &&
+    confirmedRuns.length > maximumRepetitions
+  ) {
+    const firstCueMs = Math.min(
+      ...frames
+        .map((frame) => Number(frame.countTimestampMs))
+        .filter(Number.isFinite)
+    );
+    const postCueRuns = Number.isFinite(firstCueMs)
+      ? confirmedRuns.filter(
+          (run) =>
+            (Number(frames[run.end]?.elapsedMs) || 0) >= firstCueMs - 500
+        )
+      : [];
+    confirmedRuns = (
+      postCueRuns.length >= maximumRepetitions
+        ? postCueRuns
+        : confirmedRuns
+    ).slice(0, maximumRepetitions);
+  }
 
   let previousEndIndex = -1;
   return confirmedRuns.map((run, runIndex) => {
@@ -371,7 +404,10 @@ export function buildPracticeSessionAnalysis(
   const repetitionWindows = buildMovementDrivenWindows(
     orderedFrames,
     clusterConfig?.preparation_context_ms,
-    clusterConfig
+    {
+      ...(clusterConfig || {}),
+      maximum_repetitions: Number(targetReps) || null
+    }
   );
   const analysisFrames = orderedFrames.map((frame, index) => {
     const window = repetitionWindows.find(

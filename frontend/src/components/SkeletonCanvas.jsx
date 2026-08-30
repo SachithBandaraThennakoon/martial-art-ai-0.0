@@ -1774,7 +1774,10 @@ export default function SkeletonCanvas({
             auxiliary_features: auxiliaryScores
           }
         };
-        if (shouldLoadTemporalPredictor({
+        const temporalInferenceSource =
+          techniquePackageRef.current?.getTemporalInferenceSource?.() || "auto";
+        const temporalOnnxAllowed = temporalInferenceSource !== "rules";
+        if (temporalOnnxAllowed && shouldLoadTemporalPredictor({
           enabled: performanceConfigRef.current.onnxEnabled,
           sessionActive: trackingSessionActiveRef.current,
           sessionPaused: trackingSessionPausedRef.current,
@@ -1782,15 +1785,21 @@ export default function SkeletonCanvas({
         })) {
           ensureTemporalPhasePredictor();
         }
-        const learnedStatePrediction = temporalPhasePredictorRef.current?.update({
-          landmarks: frame.worldPose,
-          timestampMs: now
-        }) || null;
+        const learnedStatePrediction = temporalOnnxAllowed
+          ? temporalPhasePredictorRef.current?.update({
+              landmarks: frame.worldPose,
+              timestampMs: now
+            }) || null
+          : null;
         const ruleEngineShadowFrame = trackingSessionActiveRef.current
           ? trackingSessionEngineRef.current?.update(level1State, {
               learnedStatePrediction,
               learnedModelExpected:
-                trackingSessionEngineRef.current?.techniquePackage?.id === "jab"
+                temporalOnnxAllowed &&
+                (
+                  temporalInferenceSource === "onnx" ||
+                  trackingSessionEngineRef.current?.techniquePackage?.id === "jab"
+                )
             }) || null
           : trackingSessionEngineRef.current?.latestFrame || null;
         onRuleEngineFrameUpdateRef.current?.(ruleEngineShadowFrame);

@@ -1,8 +1,24 @@
-const RESERVED_LABELS = new Set([
+export const TEMPORAL_SPECIAL_LABELS = Object.freeze([
   "__PAD__",
   "__UNKNOWN__",
   "__TRACKING_LOST__"
 ]);
+
+export const CANONICAL_TEMPORAL_PHASES = Object.freeze([
+  "PREPARATION",
+  "ENTRY",
+  "EXECUTION",
+  "PEAK",
+  "RETRACTION",
+  "RECOVERY"
+]);
+
+export const UNIVERSAL_TEMPORAL_LABELS = Object.freeze([
+  ...TEMPORAL_SPECIAL_LABELS,
+  ...CANONICAL_TEMPORAL_PHASES
+]);
+
+const RESERVED_LABELS = new Set(TEMPORAL_SPECIAL_LABELS);
 
 const clampProbability = (value) =>
   Math.max(0, Math.min(1, Number(value) || 0));
@@ -59,6 +75,12 @@ export function validateUniversalTemporalMetadata(metadata, techniquePackage) {
   const phaseLabels = metadata?.output?.labels;
   if (!Array.isArray(phaseLabels) || !phaseLabels.length) {
     errors.push("output.labels must be a non-empty array");
+  } else {
+    UNIVERSAL_TEMPORAL_LABELS.forEach((label) => {
+      if (!phaseLabels.includes(label)) {
+        errors.push(`output.labels is missing universal label ${label}`);
+      }
+    });
   }
   const phaseMap =
     metadata?.techniques?.[techniquePackage?.id]?.phase_to_native;

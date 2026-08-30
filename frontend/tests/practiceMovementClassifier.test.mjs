@@ -298,8 +298,8 @@ test("a held pose cannot complete a repetition until it is released", () => {
 test("cue analysis adds timing metadata without replacing movement labels", () => {
   const frames = [
     { elapsedMs: 100, rep: 1, step: 1, motionScore: 0.1 },
-    { elapsedMs: 300, rep: 1, step: 2, motionScore: 0.8 },
-    { elapsedMs: 1200, rep: 2, step: 1, motionScore: 0.9 }
+    { elapsedMs: 300, rep: 1, step: 2, motionScore: 0.8, countedRep: 1 },
+    { elapsedMs: 1200, rep: 2, step: 1, motionScore: 0.9, countedRep: 2 }
   ];
   const analyzed = attachCountAttention(
     frames,
@@ -312,6 +312,19 @@ test("cue analysis adds timing metadata without replacing movement labels", () =
     frames.map(({ rep, step }) => ({ rep, step }))
   );
   assert.deepEqual(analyzed.map((frame) => frame.countCue), [1, 1, 2]);
+  assert.deepEqual(analyzed.map((frame) => frame.attentionOffsetMs), [300, 300, 200]);
+});
+
+test("cue timing ignores preparation motion that never completes an impact", () => {
+  const frames = [
+    { elapsedMs: 850, motionScore: 0.95, countedRep: null },
+    { elapsedMs: 1450, motionScore: 0.4, countedRep: 1 }
+  ];
+
+  const analyzed = attachCountAttention(frames, [{ elapsedMs: 1000 }], 2000);
+
+  assert.equal(analyzed[0].attentionOffsetMs, 450);
+  assert.equal(analyzed[0].attentionTiming, "late");
 });
 
 test("rep and step filters return only the exact movement frame range", () => {
@@ -380,13 +393,9 @@ test("jab counts on extension and requires recovery before the next repetition",
     stepScores: [90, 12, 94]
   });
   assert.equal(recoveryPose.matchedStep, 3);
-  assert.equal(recoveryPose.temporalPhase, "rep_peak");
-  assert.equal(recoveryPose.completedRep, null);
-  classifier.update({ motionScore: 0.01, stepScores: [90, 12, 94] });
-  const recovered = classifier.update({ motionScore: 0.01, stepScores: [90, 12, 94] });
-  assert.equal(recovered.completedRep, 1);
-  assert.equal(recovered.temporalPhase, "rep_complete");
-  assert.equal(recovered.expectedStep, 1);
+  assert.equal(recoveryPose.temporalPhase, "rep_complete");
+  assert.equal(recoveryPose.completedRep, 1);
+  assert.equal(recoveryPose.expectedStep, 1);
   assert.equal(classifier.getState().rep, 2);
 });
 
@@ -488,6 +497,140 @@ test("low-confidence and one-frame noisy poses do not advance the sequence", () 
 
   assert.equal(noisyMatch.matchedStep, null);
   assert.equal(classifier.getState().expectedStep, 1);
+});
+
+test("duplicate and out-of-order source timestamps cannot confirm a step", () => {
+  const classifier = createPracticeMovementClassifier({
+    stepCount: 2,
+    targetReps: 1,
+    stableFrames: 3
+  });
+  const evidence = {
+    motionScore: 0.05,
+    stepScores: [95, 10],
+    trackingConfidence: 0.9
+  };
+
+  classifier.update({ ...evidence, timestampMs: 100 });
+  const duplicate = classifier.update({ ...evidence, timestampMs: 100 });
+  const outOfOrder = classifier.update({ ...evidence, timestampMs: 90 });
+
+  assert.equal(duplicate.matchedStep, null);
+  assert.equal(outOfOrder.matchedStep, null);
+  assert.equal(classifier.getState().expectedStep, 1);
+
+  classifier.update({ ...evidence, timestampMs: 133 });
+  const confirmed = classifier.update({ ...evidence, timestampMs: 166 });
+  assert.equal(confirmed.matchedStep, 1);
+  assert.equal(classifier.getState().expectedStep, 2);
+});
+
+test("a processing stall expires an old Jab impact candidate", () => {
+  const classifier = createPracticeMovementClassifier({
+    countStep: 2,
+    stepCount: 3,
+    targetReps: 1,
+    stableFrames: 2,
+    exitFrames: 2,
+    maxInputGapMs: 250
+  });
+
+  classifier.update({ motionScore: 0, stepScores: [94, 10, 18], timestampMs: 0 });
+  classifier.update({ motionScore: 0, stepScores: [95, 10, 17], timestampMs: 33 });
+  classifier.update({ motionScore: 0.05, stepScores: [35, 45, 20], timestampMs: 66 });
+  classifier.update({ motionScore: 0.06, stepScores: [25, 55, 20], timestampMs: 99 });
+  classifier.update({ motionScore: 0.07, stepScores: [20, 82, 20], timestampMs: 132 });
+  const candidate = classifier.update({
+    motionScore: 0.1,
+    stepScores: [16, 96, 18],
+    timestampMs: 165
+  });
+  const afterStall = classifier.update({
+    motionScore: 0.09,
+    stepScores: [55, 40, 72],
+    timestampMs: 600
+  });
+
+  assert.equal(candidate.temporalPhase, "step_peak");
+  assert.equal(afterStall.countedRep, null);
+  assert.equal(afterStall.matchedStep, null);
+  assert.equal(classifier.getState().expectedStep, 2);
+});
+
+test("a sparse Jab completes when recovery returns to the personal guard", () => {
+  const classifier = createPracticeMovementClassifier({
+    countStep: 2,
+    stepCount: 3,
+    targetReps: 2,
+    stableFrames: 2,
+    exitFrames: 2,
+    recoveryFrames: 2,
+    recoveryAngleKey: "elbow_left"
+  });
+  const update = (timestampMs, motionScore, stepScores, elbowLeft) =>
+    classifier.update({
+      timestampMs,
+      motionScore,
+      stepScores,
+      trackingConfidence: 0.95,
+      angles: { elbow_left: elbowLeft }
+    });
+
+  update(0, 0.01, [94, 10, 20], 38);
+  update(200, 0.01, [95, 10, 20], 39);
+  update(400, 0.05, [35, 45, 20], 42);
+  update(600, 0.06, [25, 55, 20], 40);
+  update(800, 0.07, [20, 82, 20], 41);
+  const impact = update(1000, 0.01, [20, 50, 20], 39);
+  update(1200, 0.12, [16, 96, 18], 168);
+  update(1400, 0.1, [55, 40, 72], 122);
+  const returned = update(1600, 0.08, [20, 20, 25], 43);
+  const completed = returned;
+
+  assert.equal(impact.countedRep, 1);
+  assert.equal(returned.matchedStep, 3);
+  assert.equal(returned.stateConfidence > 0, true);
+  assert.equal(completed.completedRep, 1);
+  assert.equal(classifier.getState().rep, 2);
+});
+
+test("three Jabs remain distinct when source frames arrive near 3 fps", () => {
+  const classifier = createPracticeMovementClassifier({
+    countStep: 2,
+    stepCount: 3,
+    targetReps: 3,
+    stableFrames: 3,
+    exitFrames: 2,
+    recoveryFrames: 3,
+    recoveryAngleKey: "elbow_left"
+  });
+  let timestampMs = 0;
+  const completedReps = [];
+  const update = (motionScore, stepScores, elbowLeft) => {
+    const result = classifier.update({
+      timestampMs,
+      motionScore,
+      stepScores,
+      trackingConfidence: 0.95,
+      angles: { elbow_left: elbowLeft }
+    });
+    timestampMs += 360;
+    if (result.completedRep) completedReps.push(result.completedRep);
+  };
+
+  update(0.01, [95, 10, 20], 40);
+  update(0.01, [95, 10, 20], 40);
+  update(0.01, [95, 10, 20], 40);
+  for (let rep = 0; rep < 3; rep += 1) {
+    update(0.08, [20, 70, 20], 70);
+    update(0.12, [15, 96, 18], 165);
+    update(0.1, [55, 40, 72], 120);
+    update(0.04, [20, 20, 25], 42);
+    update(0.01, [95, 10, 20], 40);
+  }
+
+  assert.deepEqual(completedReps, [1, 2, 3]);
+  assert.equal(classifier.getState().completed, true);
 });
 
 test("fast motion does not count when the impact step is not the best match", () => {

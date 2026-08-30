@@ -11,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 import main
 from database import Base, get_db
 from models.technique import Technique
-from models.training_memory import PracticeSession, PracticeSessionTape
+from models.training_memory import PracticeRep, PracticeSession, PracticeSessionTape
 from models.user import User
 from tests.test_tape_storage import valid_document
 from utils.security import create_access_token
@@ -126,6 +126,26 @@ class TapeAPITests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 422)
         self.assertEqual(self.db.query(PracticeSessionTape).count(), 0)
+
+    def test_reposting_a_rep_updates_instead_of_duplicating_it(self):
+        path = f"/practice/sessions/{self.session.id}/reps"
+        first = self.client.post(
+            path,
+            headers=self.headers(),
+            json={"rep_number": 1, "accuracy": 41, "duration_ms": 2200},
+        )
+        corrected = self.client.post(
+            path,
+            headers=self.headers(),
+            json={"rep_number": 1, "accuracy": 93, "duration_ms": 1400},
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(corrected.status_code, 200)
+        reps = self.db.query(PracticeRep).all()
+        self.assertEqual(len(reps), 1)
+        self.assertEqual(reps[0].accuracy, 93)
+        self.assertEqual(reps[0].duration_ms, 1400)
 
 
 if __name__ == "__main__":

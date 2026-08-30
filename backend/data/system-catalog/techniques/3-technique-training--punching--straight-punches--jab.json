@@ -18,10 +18,10 @@
         "enabled": true,
         "directory": "jab",
         "catalog_version": "1.0.0",
-        "tracking_version": "1.0.0"
+        "tracking_version": "1.0.1"
       },
       "tracking_package": "jab",
-      "tracking_version": "1.0.0",
+      "tracking_version": "1.0.1",
       "runtime_capability": "temporal_tracking",
       "catalog_schema_version": "1.0",
       "movement_system": "XMA",
@@ -1450,10 +1450,27 @@
       "manifest": {
         "schema_version": "1.0",
         "id": "jab",
-        "version": "1.0.0",
+        "version": "1.0.1",
         "display_name": "Jab",
         "tracking_profile": "cyclic-repetition",
         "initial_state": "GUARD",
+        "temporal_inference": {
+          "source": "rules",
+          "state_to_canonical_phase": {
+            "GUARD": "PREPARATION",
+            "EXTENSION": "EXECUTION",
+            "FULL_EXTENSION": "PEAK",
+            "RETRACTION": "RETRACTION",
+            "RECOVERY": "RECOVERY"
+          },
+          "transition_to_canonical_phase": {
+            "GUARD_TO_EXTENSION": "ENTRY",
+            "EXTENSION_TO_FULL_EXTENSION": "PEAK",
+            "FULL_EXTENSION_TO_RETRACTION": "RETRACTION",
+            "RETRACTION_TO_RECOVERY": "RECOVERY",
+            "RECOVERY_TO_GUARD": "PREPARATION"
+          }
+        },
         "supported_sides": [
           "left",
           "right"
@@ -1514,13 +1531,13 @@
                 {
                   "feature": "lead_elbow_angle",
                   "operator": "between",
-                  "min": 50,
-                  "max": 115
+                  "min": 20,
+                  "max": 125
                 },
                 {
                   "feature": "lead_wrist_guard_distance",
                   "operator": "lte",
-                  "value": 0.35
+                  "value": 0.65
                 },
                 {
                   "feature": "motion_energy",
@@ -1622,13 +1639,13 @@
                 {
                   "feature": "lead_wrist_guard_distance",
                   "operator": "lte",
-                  "value": 0.38
+                  "value": 0.65
                 },
                 {
                   "feature": "lead_elbow_angle",
                   "operator": "between",
-                  "min": 50,
-                  "max": 120
+                  "min": 20,
+                  "max": 125
                 },
                 {
                   "feature": "motion_energy",

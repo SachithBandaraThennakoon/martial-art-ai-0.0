@@ -65,6 +65,28 @@ const JAB = {
   }
 };
 
+test("rule evidence retains configured thresholds for live diagnostics", async () => {
+  const machine = new TemporalStateMachine(await loadTechniquePackage("jab"));
+  const frame = machine.update({
+    timestampMs: 0,
+    features: {
+      ...JAB.guard,
+      lead_wrist_guard_distance: 0.4
+    },
+    trackingConfidence: 0.96
+  });
+  const conditions = frame.rule_evidence[0].evaluation.evidence;
+  const elbow = conditions.find((condition) => condition.feature === "lead_elbow_angle");
+  const wrist = conditions.find(
+    (condition) => condition.feature === "lead_wrist_guard_distance"
+  );
+
+  assert.equal(elbow.min, 20);
+  assert.equal(elbow.max, 125);
+  assert.equal(wrist.value, 0.65);
+  assert.equal(wrist.satisfied, true);
+});
+
 test("Jab completes only after the configured ordered state sequence", async () => {
   const machine = new TemporalStateMachine(await loadTechniquePackage("jab"));
 

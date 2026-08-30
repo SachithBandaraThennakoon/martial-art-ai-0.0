@@ -31,11 +31,11 @@ const validJab = ({ completeRecovery = true } = {}) => [
   sample(0.09, [20, 82, 20]),
   sample(0.1, [16, 96, 18]),
   sample(0.09, [55, 40, 72]),
-  sample(0.02, [86, 15, 92]),
-  sample(0.01, [90, 12, 94]),
-  sample(0.01, [91, 11, 95]),
   ...(completeRecovery
     ? [
+        sample(0.02, [86, 15, 92]),
+        sample(0.01, [90, 12, 94]),
+        sample(0.01, [91, 11, 95]),
         sample(0.01, [90, 12, 94]),
         sample(0.01, [90, 12, 94])
       ]
@@ -91,7 +91,9 @@ function analyze(samples, countMarkers = [{ elapsedMs: 0 }]) {
 }
 
 const hasPeak = (frames) =>
-  frames.some((frame) => frame.temporalPhase === "rep_peak");
+  frames.some(
+    (frame) => frame.matchedStep === 3 || frame.temporalPhase === "rep_peak"
+  );
 
 const completed = (frames) =>
   frames.some(
@@ -200,6 +202,9 @@ test("missing recovery remains an incomplete repetition", () => {
     ...validJab({ completeRecovery: false })
   ]);
 
-  assert.equal(hasPeak(result.classified), true);
+  assert.equal(
+    result.classified.some((frame) => frame.countedRep === 1),
+    true
+  );
   assert.equal(completed(result.classified), false);
 });

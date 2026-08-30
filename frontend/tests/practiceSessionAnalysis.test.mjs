@@ -17,6 +17,7 @@ const frame = ({
   stepScores = [],
   accuracy = null,
   scorable = false,
+  countTimestampMs = null,
   rule = null
 }) => ({
   elapsedMs,
@@ -28,6 +29,7 @@ const frame = ({
   stepScores,
   accuracy,
   scorable,
+  countTimestampMs,
   trackingReliable: true,
   ruleEngineAnalysis: rule ? { corrected: rule } : null
 });
@@ -188,6 +190,74 @@ test("repeated extension arcs split physical Jabs even when live rep labels merg
   assert.equal(analysis.frame_assignments[75].rep, 1);
   assert.equal(analysis.frame_assignments[145].rep, 2);
   assert.equal(analysis.frame_assignments[235].rep, 3);
+});
+
+test("a long extension-like preparation hold does not become an extra repetition", () => {
+  const falsePreparationEnd = 105;
+  const extensionRanges = [
+    [130, 145],
+    [175, 190],
+    [220, 235]
+  ];
+  const frames = Array.from({ length: 260 }, (_, index) => {
+    const preparing = index <= falsePreparationEnd;
+    const isExtension = extensionRanges.some(
+      ([start, end]) => index >= start && index <= end
+    );
+    return frame({
+      elapsedMs: index * (1000 / 30),
+      rep: Math.max(1, extensionRanges.findIndex(([, end]) => index <= end) + 1),
+      step: preparing || isExtension ? 2 : 3,
+      temporalPhase: preparing || isExtension ? "step_peak" : "rep_recovery",
+      stepScores: preparing || isExtension ? [10, 100, 10] : [95, 20, 95],
+      accuracy: 96,
+      scorable: true
+    });
+  });
+
+  const analysis = buildPracticeSessionAnalysis(frames, {
+    steps: [{}, {}, {}],
+    targetReps: 3
+  });
+
+  assert.equal(analysis.repetitions.length, 3);
+  assert.equal(analysis.clustered_completed_repetitions, 3);
+  assert.equal(analysis.frame_assignments[50].kind, "preparation");
+  assert.equal(analysis.repetitions[0].rep, 1);
+  assert.ok(analysis.repetitions[0].start_frame_index > falsePreparationEnd - 30);
+});
+
+test("a three-rep set drops an excess pre-cue setup candidate", () => {
+  const ranges = [
+    [5, 10],
+    [45, 52],
+    [75, 82],
+    [105, 112]
+  ];
+  const frames = Array.from({ length: 135 }, (_, index) => {
+    const isImpact = ranges.some(([start, end]) => index >= start && index <= end);
+    return frame({
+      elapsedMs: index * 100,
+      temporalPhase: isImpact ? "step_peak" : "rep_recovery",
+      stepScores: isImpact ? [10, 100, 10] : [95, 20, 95],
+      countTimestampMs: 4000,
+      accuracy: 94,
+      scorable: true
+    });
+  });
+
+  const analysis = buildPracticeSessionAnalysis(frames, {
+    steps: [{}, {}, {}],
+    targetReps: 3
+  });
+
+  assert.equal(analysis.repetitions.length, 3);
+  assert.equal(analysis.clustered_completed_repetitions, 3);
+  assert.equal(analysis.frame_assignments[7].kind, "preparation");
+  assert.deepEqual(
+    analysis.repetitions.map((repetition) => repetition.rep),
+    [1, 2, 3]
+  );
 });
 
 test("corrected session metrics use post-session repetitions as authority", () => {

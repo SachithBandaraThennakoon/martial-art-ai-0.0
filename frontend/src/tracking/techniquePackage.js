@@ -10,6 +10,12 @@ const SUPPORTED_OPERATORS = new Set([
   "near_baseline"
 ]);
 
+const SUPPORTED_TEMPORAL_INFERENCE_SOURCES = new Set([
+  "auto",
+  "onnx",
+  "rules"
+]);
+
 const REQUIRED_PARTS = [
   "manifest",
   "states",
@@ -118,6 +124,49 @@ export function validateTechniquePackage(source) {
   const stateNames = Object.keys(states.states || {});
   const stateSet = new Set(stateNames);
   if (!stateNames.length) issues.push("states.states must define at least one state");
+
+  const temporalInference = manifest.temporal_inference;
+  if (temporalInference !== undefined) {
+    if (!isRecord(temporalInference)) {
+      issues.push("manifest.temporal_inference must be an object");
+    } else {
+      if (!SUPPORTED_TEMPORAL_INFERENCE_SOURCES.has(temporalInference.source)) {
+        issues.push(
+          `manifest.temporal_inference.source "${temporalInference.source}" is not supported`
+        );
+      }
+      const statePhaseMap = temporalInference.state_to_canonical_phase;
+      if (statePhaseMap !== undefined && !isRecord(statePhaseMap)) {
+        issues.push(
+          "manifest.temporal_inference.state_to_canonical_phase must be an object"
+        );
+      } else {
+        Object.entries(statePhaseMap || {}).forEach(([state, phase]) => {
+          if (!stateSet.has(state)) {
+            issues.push(
+              `canonical phase mapping references unknown state "${state}"`
+            );
+          }
+          if (!isNonEmptyString(phase)) {
+            issues.push(`canonical phase for state "${state}" is required`);
+          }
+        });
+      }
+      const transitionPhaseMap =
+        temporalInference.transition_to_canonical_phase;
+      if (transitionPhaseMap !== undefined && !isRecord(transitionPhaseMap)) {
+        issues.push(
+          "manifest.temporal_inference.transition_to_canonical_phase must be an object"
+        );
+      } else {
+        Object.entries(transitionPhaseMap || {}).forEach(([transition, phase]) => {
+          if (!isNonEmptyString(transition) || !isNonEmptyString(phase)) {
+            issues.push("canonical transition phase mappings require names and phases");
+          }
+        });
+      }
+    }
+  }
   if (states.initial_state !== manifest.initial_state) {
     issues.push("manifest.initial_state and states.initial_state must match");
   }
@@ -261,6 +310,24 @@ export function createTechniquePackage(source) {
     },
     getMode(mode) {
       return source.modes[mode] || null;
+    },
+    getTemporalInferenceSource() {
+      return source.manifest.temporal_inference?.source || "auto";
+    },
+    getCanonicalPhase(stateName, event = null, candidateState = null) {
+      const inference = source.manifest.temporal_inference || {};
+      const transitionKey = event?.from_state && event?.to_state
+        ? `${event.from_state}_TO_${event.to_state}`
+        : stateName && candidateState
+          ? `${stateName}_TO_${candidateState}`
+        : null;
+      return (
+        (transitionKey
+          ? inference.transition_to_canonical_phase?.[transitionKey]
+          : null) ||
+        inference.state_to_canonical_phase?.[stateName] ||
+        null
+      );
     },
     canTransition(fromState, toState) {
       return (

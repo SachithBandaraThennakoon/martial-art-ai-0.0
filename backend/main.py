@@ -415,17 +415,23 @@ def record_practice_rep(
 ):
     user_record = _get_user_from_token(db, token)
     session = _get_user_practice_session(db, user_record.id, session_id)
-    rep = PracticeRep(
-        practice_session_id=session.id,
-        rep_number=max(1, request.rep_number),
-        accuracy=max(0, min(request.accuracy, 100)),
-        duration_ms=max(0, request.duration_ms),
-        speed_label=(request.speed_label or "").strip()[:40] or None,
-        quality_label=(request.quality_label or "").strip()[:40] or None,
-        focus_body_part=(request.focus_body_part or "").strip()[:80] or None,
-        issue=(request.issue or "").strip()[:80] or None
-    )
-    db.add(rep)
+    rep_number = max(1, request.rep_number)
+    rep = db.query(PracticeRep).filter(
+        PracticeRep.practice_session_id == session.id,
+        PracticeRep.rep_number == rep_number,
+    ).first()
+    if rep is None:
+        rep = PracticeRep(
+            practice_session_id=session.id,
+            rep_number=rep_number,
+        )
+        db.add(rep)
+    rep.accuracy = max(0, min(request.accuracy, 100))
+    rep.duration_ms = max(0, request.duration_ms)
+    rep.speed_label = (request.speed_label or "").strip()[:40] or None
+    rep.quality_label = (request.quality_label or "").strip()[:40] or None
+    rep.focus_body_part = (request.focus_body_part or "").strip()[:80] or None
+    rep.issue = (request.issue or "").strip()[:80] or None
     db.commit()
     _refresh_practice_session_summary(db, session)
     db.refresh(rep)

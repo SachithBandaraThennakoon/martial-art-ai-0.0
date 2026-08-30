@@ -1,4 +1,7 @@
 import { decodeDurationAwareSequence } from "./durationAwareSequenceDecoder.js";
+import { TEMPORAL_SPECIAL_LABELS } from "./temporalModelContract.js";
+
+const [, UNKNOWN_PHASE, TRACKING_LOST_PHASE] = TEMPORAL_SPECIAL_LABELS;
 
 function clone(value) {
   return structuredClone(value);
@@ -218,6 +221,29 @@ function rebuildPhases(frames, frameIntervalMs) {
     }
   });
   return buildSegments(frames, frameIntervalMs);
+}
+
+function assignCanonicalPhases(frames, techniquePackage) {
+  let previousStep = null;
+  frames.forEach((frame) => {
+    if (frame.tracking_lost) {
+      frame.canonical_phase = TRACKING_LOST_PHASE;
+      previousStep = null;
+      return;
+    }
+    if (frame.unknown_movement || !frame.step) {
+      frame.canonical_phase = UNKNOWN_PHASE;
+      previousStep = null;
+      return;
+    }
+    const transition =
+      frame.phase === "ENTRY" && previousStep && previousStep !== frame.step
+        ? { from_state: previousStep, to_state: frame.step }
+        : null;
+    frame.canonical_phase =
+      techniquePackage.getCanonicalPhase?.(frame.step, transition) || UNKNOWN_PHASE;
+    previousStep = frame.step;
+  });
 }
 
 function repetitionFromActive(active, status, endSegment, frames) {
@@ -482,6 +508,7 @@ export function postProcessSessionTimeline({
     corrections
   });
   const segments = rebuildPhases(frames, frameIntervalMs);
+  assignCanonicalPhases(frames, techniquePackage);
   const repetitions = rebuildRepetitions({
     frames,
     segments,

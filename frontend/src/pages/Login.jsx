@@ -2,6 +2,7 @@ import { useContext, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate } from "react-router";
 import { AuthContext } from "../context/auth";
 import { API_BASE_URL } from "../services/api";
+import { getApiErrorMessage } from "../services/apiError";
 import AuthStory from "../components/AuthStory";
 
 // Supabase can take over ten seconds to establish a new pooled connection on
@@ -47,7 +48,10 @@ export default function Login() {
       if (!response.ok || !data.access_token) {
         setError(response.status === 401
           ? "That email and password combination is not correct."
-          : data.detail || "We couldn’t sign you in. Please try again.");
+          : getApiErrorMessage(
+              data.detail,
+              "We couldn’t sign you in. Please try again."
+            ));
         return;
       }
 

@@ -1,5 +1,6 @@
 export default function DiagnosticTraceControls({
   active,
+  description = "Captures a 5 Hz timeline plus the full available pipeline every second: perception, comparisons, rule engine, L1–L4, reasoning, actions, feedback, and voice state. No camera video is stored.",
   recordCount,
   onClear,
   onDownload,
@@ -16,9 +17,7 @@ export default function DiagnosticTraceControls({
         <span>{recordCount} records</span>
       </div>
       <p className="diagnostic-trace-controls__copy">
-        Captures a 5 Hz timeline plus the full available pipeline every second:
-        perception, comparisons, rule engine, L1–L4, reasoning, actions,
-        feedback, and voice state. No camera video is stored.
+        {description}
       </p>
       <div className="diagnostic-trace-controls__actions">
         {active ? (

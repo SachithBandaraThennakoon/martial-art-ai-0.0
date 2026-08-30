@@ -252,6 +252,7 @@ export function createDiagnosticTraceRecorder({
             },
             stage_3_level1_motion: context.level1State || null,
             stage_4_rule_engine: context.ruleEngineFrame || null,
+            stage_4a_practice_classifier: context.practice || null,
             stage_5_level2_action: context.level2State || null,
             stage_6_level3_session: context.level3State || null,
             stage_7_level4_user: context.level4State || null,
@@ -293,6 +294,18 @@ export function createDiagnosticTraceRecorder({
           mastery_threshold: context.masteryThreshold,
           targets: context.targets || []
         },
+        rule_engine: sanitizePipelineValue(context.ruleEngineFrame || null, {
+          maxArrayLength: 256,
+          maxDepth: 10,
+          maxObjectKeys: 160,
+          maxStringLength: 2000
+        }),
+        practice: sanitizePipelineValue(context.practice || null, {
+          maxArrayLength: 256,
+          maxDepth: 10,
+          maxObjectKeys: 160,
+          maxStringLength: 2000
+        }),
         layers: {
           level1: compactLayer(context.level1State, "motion_context"),
           level2: compactLayer(context.level2State, "action_context"),

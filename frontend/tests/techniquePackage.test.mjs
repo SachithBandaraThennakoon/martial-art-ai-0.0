@@ -40,6 +40,29 @@ test("Jab only accepts its configured ordered transitions", async () => {
   assert.equal(techniquePackage.canTransition("EXTENSION", "FULL_EXTENSION"), true);
   assert.equal(techniquePackage.canTransition("GUARD", "FULL_EXTENSION"), false);
   assert.equal(techniquePackage.canTransition("FULL_EXTENSION", "RECOVERY"), false);
+  assert.equal(techniquePackage.getTemporalInferenceSource(), "rules");
+  assert.equal(techniquePackage.getCanonicalPhase("GUARD"), "PREPARATION");
+  assert.equal(
+    techniquePackage.getCanonicalPhase("EXTENSION", {
+      from_state: "GUARD",
+      to_state: "EXTENSION"
+    }),
+    "ENTRY"
+  );
+});
+
+test("temporal inference configuration rejects unsupported sources", async () => {
+  const source = await loadTechniqueSource(trackingRoot, "jab");
+  source.manifest.temporal_inference.source = "unknown-model";
+
+  assert.throws(
+    () => validateTechniquePackage(source),
+    (error) => {
+      assert.ok(error instanceof TechniquePackageValidationError);
+      assert.match(error.message, /temporal_inference\.source/);
+      return true;
+    }
+  );
 });
 
 test("invalid technique packages return actionable validation issues", async () => {

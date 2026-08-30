@@ -52,7 +52,15 @@ function buildDataPackage(filePath, record) {
       directory: filePath,
       enabled: true,
       catalog_version: "1.0.0",
-      ...(trainingSteps.temporal_runtime ? { tracking_version: "1.0.0" } : {})
+      ...(trainingSteps.temporal_runtime
+        ? {
+            tracking_version:
+              trainingSteps.temporal_runtime.manifest?.version ||
+              metadata.tracking_version ||
+              technique.version ||
+              "1.0.0"
+          }
+        : {})
     },
     catalog,
     trainingSteps: normalizedTrainingSteps,
