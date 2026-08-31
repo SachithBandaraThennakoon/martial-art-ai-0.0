@@ -23,6 +23,7 @@ export function AuthProvider({ children }) {
   const [userRole, setUserRole] = useState("user");
   const [userName, setUserName] = useState("");
   const [subscriptionStatus, setSubscriptionStatus] = useState("inactive");
+  const [accountProfile, setAccountProfile] = useState(null);
   const [isGuest, setIsGuest] = useState(false);
   const [authReady, setAuthReady] = useState(false);
   const guestLoginPromiseRef = useRef(null);
@@ -33,6 +34,7 @@ export function AuthProvider({ children }) {
     setUserName(profile.name || "");
     setSubscriptionStatus(profile.subscription_status || "inactive");
     setIsGuest(Boolean(profile.is_guest));
+    setAccountProfile(Object.keys(profile).length ? profile : null);
   }, []);
 
   const login = useCallback((newToken, plan = "FREE_PLAN", profile = {}) => {
@@ -159,6 +161,7 @@ export function AuthProvider({ children }) {
         userRole,
         userName,
         subscriptionStatus,
+        accountProfile,
         isGuest
       }}
     >

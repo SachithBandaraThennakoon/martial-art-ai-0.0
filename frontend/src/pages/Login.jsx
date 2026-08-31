@@ -20,6 +20,7 @@ export default function Login() {
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const registered = location.state?.registered;
+  const passwordChanged = new URLSearchParams(location.search).get("password") === "changed";
   const destination = location.state?.from;
 
   // A valid restored tab session should never leave the user at a second login
@@ -55,10 +56,7 @@ export default function Login() {
         return;
       }
 
-      login(data.access_token, data.plan || "FREE_PLAN", {
-        name: data.name,
-        role: data.role
-      });
+      login(data.access_token, data.plan || "FREE_PLAN", data);
       navigate(destination ? `${destination.pathname}${destination.search || ""}` : "/", {
         replace: true
       });
@@ -99,6 +97,9 @@ export default function Login() {
 
         {registered ? (
           <p className="form-success" role="status">Account created. Sign in to open your Studio.</p>
+        ) : null}
+        {passwordChanged ? (
+          <p className="form-success" role="status">Password updated. Sign in again with your new password.</p>
         ) : null}
 
         <label className="field">

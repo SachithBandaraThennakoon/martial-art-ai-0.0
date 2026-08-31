@@ -1,5 +1,5 @@
 import { lazy, Suspense, useContext, useEffect, useState } from "react";
-import { BrowserRouter, Routes, Route, useLocation } from "react-router";
+import { BrowserRouter, Navigate, Routes, Route, useLocation } from "react-router";
 import { AuthProvider } from "./context/AuthContext";
 import { AuthContext } from "./context/auth";
 import { CatalogProvider } from "./context/CatalogContext";
@@ -22,6 +22,10 @@ import ResetPassword from "./pages/ResetPassword";
 import PrivacyNotice from "./pages/PrivacyNotice";
 import Terms from "./pages/Terms";
 import AccountPrivacy from "./pages/AccountPrivacy";
+import AccountLayout from "./components/AccountLayout";
+import AccountProfile from "./pages/AccountProfile";
+import AccountSecurity from "./pages/AccountSecurity";
+import AccountSubscription from "./pages/AccountSubscription";
 
 const Training = lazy(() => import("./pages/Training"));
 const Dashboard = lazy(() => import("./pages/Dashboard"));
@@ -137,7 +141,13 @@ function AppRoutes() {
         <Route path="/reset-password" element={<ResetPassword />} />
         <Route path="/privacy" element={<PrivacyNotice />} />
         <Route path="/terms" element={<Terms />} />
-        <Route path="/account/privacy" element={<ProtectedRoute><AccountPrivacy /></ProtectedRoute>} />
+        <Route path="/account" element={<ProtectedRoute allowGuest={false}><AccountLayout /></ProtectedRoute>}>
+          <Route index element={<Navigate replace to="profile" />} />
+          <Route path="profile" element={<AccountProfile />} />
+          <Route path="security" element={<AccountSecurity />} />
+          <Route path="subscription" element={<AccountSubscription />} />
+          <Route path="privacy" element={<AccountPrivacy />} />
+        </Route>
 
         <Route path="/studio" element={<Studio />} />
 

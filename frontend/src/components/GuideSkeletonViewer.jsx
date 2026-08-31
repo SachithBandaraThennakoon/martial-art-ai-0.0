@@ -1,9 +1,9 @@
-import { OrbitControls } from "@react-three/drei";
 import { Canvas } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { interpolateArticulation, interpolatePose, poseFromReferencePose, PoseScene } from "./PoseRangeDesigner";
 
 const DEFAULT_ARTICULATION = { face: { jaw_openness: 0, gaze_horizontal: 0, gaze_vertical: 0 }, hand_left: { fist_closure: 0, finger_spread: 1, palm_turn: 0, wrist_rotation: [0, 0, 0] }, hand_right: { fist_closure: 0, finger_spread: 1, palm_turn: 0, wrist_rotation: [0, 0, 0] } };
+const DEFAULT_GUIDE_VIEW = { position: [4.6, 1.05, 9.2], target: [0, -0.05, 0] };
 function phaseOffset(segments, index) {
   return segments.slice(0, index).reduce((sum, segment) => sum + segment.duration, 0);
 }
@@ -12,7 +12,7 @@ function formatTime(milliseconds) {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-export default function GuideSkeletonViewer({ animation = {}, onPhaseChange = () => {}, selectedPhaseIndex = null, steps = [] }) {
+export default function GuideSkeletonViewer({ animation = {}, autoplayRequest = 0, onPhaseChange = () => {}, onPlaybackPhaseChange = () => {}, onPlaybackStateChange = () => {}, selectedPhaseIndex = null, steps = [] }) {
   const frames = useMemo(() => steps
     .map((step, sourceIndex) => ({ ...step, sourceIndex }))
     .filter((step) => step.reference_pose?.landmarks)
@@ -20,7 +20,9 @@ export default function GuideSkeletonViewer({ animation = {}, onPhaseChange = ()
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(Number(animation.playback_speed) || 0.75);
   const [elapsed, setElapsed] = useState(0);
+  const [viewKey, setViewKey] = useState(0);
   const previousTime = useRef(null);
+  const guideCameraView = useRef({ position: [...DEFAULT_GUIDE_VIEW.position], target: [...DEFAULT_GUIDE_VIEW.target] });
   const poseFrames = useMemo(() => frames.map((frame) => poseFromReferencePose(frame.reference_pose)), [frames]);
   const segments = useMemo(() => frames.map((frame, index) => ({
     duration: Math.max(250, Number(frame.transition_duration_ms) || (index === frames.length - 1 ? 900 : 1000)),
@@ -31,14 +33,16 @@ export default function GuideSkeletonViewer({ animation = {}, onPhaseChange = ()
   })), [frames]);
   const totalDuration = segments.reduce((sum, segment) => sum + segment.duration, 0) || 1;
   const selectedFrameIndex = frames.findIndex((frame) => frame.sourceIndex === selectedPhaseIndex);
+  const previousSelectedFrameIndex = useRef(selectedFrameIndex);
 
   useEffect(() => {
     if (!playing || frames.length < 1) return undefined;
     let requestId;
     const tick = (time) => {
       if (previousTime.current !== null) {
+        const frameDelta = time - previousTime.current;
         setElapsed((value) => {
-          const next = value + ((time - previousTime.current) * speed);
+          const next = value + (frameDelta * speed);
           return next % totalDuration;
         });
       }
@@ -53,13 +57,24 @@ export default function GuideSkeletonViewer({ animation = {}, onPhaseChange = ()
   }, [frames.length, playing, speed, totalDuration]);
 
   useEffect(() => {
+    if (selectedFrameIndex === previousSelectedFrameIndex.current) return;
+    previousSelectedFrameIndex.current = selectedFrameIndex;
     if (selectedFrameIndex < 0 || !segments[selectedFrameIndex]) return;
     const requestId = window.requestAnimationFrame(() => {
       setElapsed(phaseOffset(segments, selectedFrameIndex));
       setPlaying(false);
     });
     return () => window.cancelAnimationFrame(requestId);
-  }, [segments, selectedFrameIndex]);
+  }, [frames, segments, selectedFrameIndex]);
+
+  useEffect(() => {
+    if (!autoplayRequest || !frames.length) return;
+    const requestId = window.requestAnimationFrame(() => {
+      setElapsed(0);
+      setPlaying(true);
+    });
+    return () => window.cancelAnimationFrame(requestId);
+  }, [autoplayRequest, frames.length]);
 
   const cursor = elapsed % totalDuration;
   let activeIndex = segments.length - 1;
@@ -88,6 +103,15 @@ export default function GuideSkeletonViewer({ animation = {}, onPhaseChange = ()
   const currentTime = formatTime(cursor);
   const durationTime = formatTime(totalDuration);
 
+  useEffect(() => {
+    if (!playing || !frames[activeIndex]) return;
+    onPlaybackPhaseChange(frames[activeIndex].sourceIndex);
+  }, [activeIndex, frames, onPlaybackPhaseChange, playing]);
+
+  useEffect(() => {
+    onPlaybackStateChange(playing);
+  }, [onPlaybackStateChange, playing]);
+
   if (!frames.length) return <div className="guide-skeleton guide-skeleton--empty">Add reference poses to preview this technique.</div>;
 
   const selectPhase = (index) => {
@@ -111,24 +135,33 @@ export default function GuideSkeletonViewer({ animation = {}, onPhaseChange = ()
     setElapsed(next);
     setPlaying(false);
   };
+  const resetView = () => {
+    guideCameraView.current = { position: [...DEFAULT_GUIDE_VIEW.position], target: [...DEFAULT_GUIDE_VIEW.target] };
+    setViewKey((value) => value + 1);
+  };
 
   const playbackStatus = playing ? "Looping technique" : "Paused";
 
   return <section className="guide-skeleton guide-skeleton--workbench" aria-label="Read-only animated technique studio">
-    <header className="guide-workbench__toolbar"><strong>POSE WORKBENCH</strong><span className="guide-workbench__hint">Read-only guide studio · Orbit: drag · Zoom: wheel</span><span aria-live="polite" className="guide-workbench__state">{playbackStatus}</span></header>
-    <div className="guide-workbench__viewport"><span className="guide-workbench__perspective">Perspective</span><span className="guide-workbench__collection">Read-only pose reference</span><Canvas camera={{ fov: 32, position: [2.8, 1.3, 5.1] }} dpr={[1, 1.5]} gl={{ antialias: true }}><color attach="background" args={["#080e17"]} /><gridHelper args={[8, 20, "#17374d", "#0b1c29"]} position={[0, -1.66, 0]} /><PoseScene articulation={guideArticulation} animationProgress={transitionProgress} cameraViewRef={null} editingEnabled={false} guidesVisible={false} onMoveJoint={() => {}} onRotateJoint={() => {}} onSelectJoint={() => {}} pose={activePose} poseScale={1.35} rotation={[0, 0, 0]} rotationSnap={false} selectedJoint={null} strikingSide={activeStep?.striking_side || ""} strikingSurface={activeStep?.striking_surface || ""} targetStrikingSide={targetStep?.striking_side || ""} targetStrikingSurface={targetStep?.striking_surface || ""} transformMode="translate" /><OrbitControls enablePan={false} maxDistance={16} minDistance={3.2} target={[0, -0.1, 0]} /></Canvas><span className="guide-skeleton__phase">{activeStep?.step_name || "Reference pose"}</span><span className="guide-workbench__status">Read-only reference <em>·</em> {Object.keys(activePose || {}).length} fixed points</span></div>
+    <header className="guide-workbench__toolbar"><strong>POSE WORKBENCH</strong><span className="guide-workbench__hint">Drag to orbit · Scroll to zoom</span><button className="guide-workbench__reset" onClick={resetView} type="button">Reset view</button><span aria-live="polite" className="guide-workbench__state">{playbackStatus}</span></header>
+    <div className="guide-workbench__viewport"><span className="guide-workbench__perspective">3D reference</span><span className="guide-workbench__collection">Explore from any angle</span><Canvas camera={{ fov: 38, position: DEFAULT_GUIDE_VIEW.position }} dpr={[1, 1.5]} gl={{ antialias: true }} key={viewKey}><color attach="background" args={["#080e17"]} /><gridHelper args={[8, 20, "#17374d", "#0b1c29"]} position={[0, -1.66, 0]} /><PoseScene articulation={guideArticulation} animationProgress={transitionProgress} cameraViewRef={guideCameraView} editingEnabled={false} guidesVisible={false} onMoveJoint={() => {}} onRotateJoint={() => {}} onSelectJoint={() => {}} orbitEnablePan={false} orbitMaxDistance={22} orbitMinDistance={5} pose={activePose} poseScale={1.35} rotation={[0, 0, 0]} rotationSnap={false} selectedJoint={null} strikingSide={activeStep?.striking_side || ""} strikingSurface={activeStep?.striking_surface || ""} targetStrikingSide={targetStep?.striking_side || ""} targetStrikingSurface={targetStep?.striking_surface || ""} transformMode="translate" /></Canvas><span className="guide-skeleton__phase">{activeStep?.step_name || "Reference pose"}</span><span className="guide-workbench__status">Read-only reference <em>·</em> {Object.keys(activePose || {}).length} fixed points</span></div>
     <footer className="guide-workbench__timeline">
       <div className="guide-workbench__timeline-head">
         <div><strong>Technique timeline</strong><small>Choose a step to inspect it, or drag the playhead to any moment.</small></div>
         <div className="guide-workbench__timeline-actions">
           <div className="guide-workbench__transport" role="group" aria-label="Timeline navigation">
             <button aria-label={playing ? "Pause animation" : "Play animation"} className="guide-workbench__play" onClick={togglePlayback} type="button">{playing ? "Pause" : "Play"}</button>
+            <label className="guide-workbench__playbar">
+              <span>Timeline position</span>
+              <input aria-label="Animation timeline position" max="100" min="0" onInput={(event) => scrubTo(event.currentTarget.value)} step="0.1" type="range" value={progress} />
+              <output>{currentTime} / {durationTime}</output>
+            </label>
           </div>
           <label className="guide-workbench__speed"><span>Speed</span><select aria-label="Playback speed" onChange={(event) => setSpeed(Number(event.target.value))} value={speed}><option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1">1×</option><option value="1.25">1.25×</option></select></label>
         </div>
       </div>
       <div className="guide-workbench__phase-track">{segments.map((item, index) => <button aria-current={index === activeIndex ? "step" : undefined} className={index === activeIndex ? "is-active" : ""} key={`${frames[index].step_number}-${frames[index].step_name}`} onClick={() => selectPhase(index)} style={{ flex: `${item.duration} 1 0` }} type="button"><span className="guide-workbench__phase-dot">{String(index + 1).padStart(2, "0")}</span><strong>{frames[index].step_name}</strong><small>{(item.duration / 1000).toFixed(2)}s</small></button>) }<span className="guide-workbench__phase-progress" style={{ width: `${progress}%` }} /></div>
-      <div className="guide-workbench__scrubber"><output>{currentTime} / {durationTime}</output><input aria-label="Animation timeline position" max="100" min="0" onChange={(event) => scrubTo(event.target.value)} step="0.1" type="range" value={progress} /><small>{activeStep?.step_name || "Reference pose"} · {Math.round(transitionProgress * 100)}% complete</small></div>
+      <div className="guide-workbench__scrubber"><small>{activeStep?.step_name || "Reference pose"} · {Math.round(transitionProgress * 100)}% complete</small></div>
     </footer>
   </section>;
 }

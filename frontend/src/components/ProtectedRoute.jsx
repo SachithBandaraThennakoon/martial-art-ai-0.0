@@ -24,8 +24,8 @@ function SignInPanel({ isAnalysis, location }) {
   );
 }
 
-export default function ProtectedRoute({ children, preview = null, requiredRole }) {
-  const { token, authReady, userRole } = useContext(AuthContext);
+export default function ProtectedRoute({ allowGuest = true, children, preview = null, requiredRole }) {
+  const { token, authReady, isGuest, userRole } = useContext(AuthContext);
   const location = useLocation();
 
   if (!authReady) {
@@ -70,6 +70,10 @@ export default function ProtectedRoute({ children, preview = null, requiredRole 
 
   if (requiredRole && userRole !== requiredRole) {
     return <Navigate replace to="/studio" />;
+  }
+
+  if (!allowGuest && isGuest) {
+    return <Navigate replace state={{ from: location }} to="/register" />;
   }
 
   return children;

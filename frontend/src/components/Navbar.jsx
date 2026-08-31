@@ -2,6 +2,7 @@ import { Link, NavLink, useLocation } from "react-router";
 import { useContext, useEffect, useState } from "react";
 import { AuthContext } from "../context/auth";
 import { CATEGORY_ORDER, slugify } from "../data/techniqueCatalog";
+import ProfileAvatar from "./ProfileAvatar";
 
 export default function Navbar() {
   const { token, authReady, isGuest, logout, userName, userRole } = useContext(AuthContext);
@@ -57,7 +58,7 @@ export default function Navbar() {
               <span>Workspace</span>
               <NavLink className={studioNavClass} onClick={closeMenu} to="/studio">Studio</NavLink>
               <NavLink className={dashboardNavClass} onClick={closeMenu} to="/dashboard/overview">Dashboard</NavLink>
-              {hasVisibleSession && !isGuest ? <NavLink className={navClass} onClick={closeMenu} to="/account/privacy">Privacy &amp; account</NavLink> : null}
+              {hasVisibleSession && !isGuest ? <NavLink className={navClass} onClick={closeMenu} to="/account/profile">Profile &amp; account</NavLink> : null}
               <NavLink className={navClass} onClick={closeMenu} to="/pricing">Plans</NavLink>
               <NavLink className={navClass} onClick={closeMenu} to="/contact">Contact</NavLink>
               {userRole === "admin" ? (
@@ -105,20 +106,20 @@ export default function Navbar() {
       </div>
 
       <div className="navbar__right">
-        {!hasVisibleSession ? (
+        {!hasVisibleSession || isGuest ? (
           <>
-            <Link to="/login" className="navbar__link">Sign in</Link>
-            <Link to="/register" className="btn btn--light btn--small">Start free</Link>
+            <Link className="navbar__link" onClick={isGuest ? logout : undefined} to="/login">Sign in</Link>
+            <Link className="btn btn--light btn--small" onClick={isGuest ? logout : undefined} to="/register">Start free</Link>
           </>
         ) : (
           <>
-            {userName ? (
-              <span className="navbar__welcome" title={userName}>
-                <span aria-hidden="true" className="navbar__status-dot" />
-                Hi, {userName.split(" ")[0]}
-              </span>
-            ) : null}
             <button className="btn btn--ghost btn--small" onClick={logout}>Sign out</button>
+            {userName ? (
+              <Link className="navbar__welcome" title="Open your profile" to="/account/profile">
+                <ProfileAvatar className="navbar__avatar" name={userName} />
+                <span className="navbar__greeting">Hi, {userName.split(" ")[0]}</span>
+              </Link>
+            ) : null}
           </>
         )}
       </div>

@@ -55,9 +55,8 @@ export default function AccountPrivacy() {
   };
 
   return (
-    <main className="page legal-page account-privacy-page">
-      <p className="eyebrow">Your data controls</p>
-      <h1>Privacy &amp; account</h1>
+    <div className="account-panel account-privacy-page">
+      <header className="account-panel__header"><div><p className="eyebrow">Your data controls</p><h1>Privacy &amp; account</h1><p>Download your information or permanently close your account.</p></div><span className="account-panel__badge">Private</span></header>
       <section className="privacy-card">
         <h2>Download your data</h2>
         <p>Download your profile, consent, training, practice, calibration, support, and billing data as a JSON file. The export also lists your movement tapes and secure download links.</p>
@@ -77,6 +76,6 @@ export default function AccountPrivacy() {
         )}
       </section>
       {status ? <p className="form-status" role="status">{status}</p> : null}
-    </main>
+    </div>
   );
 }

@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import json
 
 from fastapi import Depends, HTTPException
 from fastapi.security import OAuth2PasswordBearer
@@ -82,6 +83,12 @@ def ensure_plan_access(user: User, required_plan: str | None) -> User:
 
 def account_payload(user: User) -> dict:
     current_plan = effective_plan(user)
+    try:
+        training_goals = json.loads(user.training_goals or "[]")
+    except (TypeError, json.JSONDecodeError):
+        training_goals = []
+    if not isinstance(training_goals, list):
+        training_goals = []
     return {
         "id": user.id,
         "name": user.name or "",
@@ -94,6 +101,18 @@ def account_payload(user: User) -> dict:
         "subscription_ends_at": (
             user.subscription_ends_at.isoformat() if user.subscription_ends_at else None
         ),
+        "primary_martial_art": user.primary_martial_art or "",
+        "experience_level": user.experience_level or "",
+        "preferred_stance": user.preferred_stance or "",
+        "training_goals": training_goals,
+        "measurement_units": user.measurement_units or "metric",
+        "coaching_style": user.coaching_style or "balanced",
+        "has_avatar": bool(user.avatar_data),
+        "avatar_updated_at": (
+            user.avatar_updated_at.isoformat() if user.avatar_updated_at else None
+        ),
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+        "updated_at": user.updated_at.isoformat() if user.updated_at else None,
         "is_guest": (user.email or "").lower().endswith("@guest.xmartialart.invalid"),
     }
 

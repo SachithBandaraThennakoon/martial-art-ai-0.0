@@ -1,10 +1,11 @@
 from datetime import datetime, timedelta, timezone
 import hashlib
+import json
 import os
 import secrets
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
@@ -72,8 +73,95 @@ class ResetPasswordRequest(BaseModel):
     password: str
 
 
+ALLOWED_EXPERIENCE_LEVELS = {"beginner", "intermediate", "advanced", "instructor"}
+ALLOWED_STANCES = {"orthodox", "southpaw", "switch", "not_sure"}
+ALLOWED_GOALS = {"technique", "fitness", "flexibility", "self_defense", "competition", "mindfulness"}
+ALLOWED_MEASUREMENT_UNITS = {"metric", "imperial"}
+ALLOWED_COACHING_STYLES = {"supportive", "balanced", "direct"}
+AVATAR_MAX_BYTES = 2 * 1024 * 1024
+AVATAR_MEDIA_TYPES = {"image/jpeg", "image/png", "image/webp"}
+
+
+class ProfileUpdateRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=100)
+    primary_martial_art: str = Field(default="", max_length=64)
+    experience_level: str = ""
+    preferred_stance: str = ""
+    training_goals: list[str] = Field(default_factory=list, max_length=6)
+    measurement_units: str = "metric"
+    coaching_style: str = "balanced"
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        clean = " ".join(value.strip().split())
+        if len(clean) < 2:
+            raise ValueError("Please enter your full name")
+        return clean
+
+    @field_validator("primary_martial_art")
+    @classmethod
+    def normalize_martial_art(cls, value: str) -> str:
+        return " ".join(value.strip().split())
+
+    @field_validator("experience_level")
+    @classmethod
+    def validate_experience_level(cls, value: str) -> str:
+        clean = value.strip().lower()
+        if clean and clean not in ALLOWED_EXPERIENCE_LEVELS:
+            raise ValueError("Choose a valid experience level")
+        return clean
+
+    @field_validator("preferred_stance")
+    @classmethod
+    def validate_stance(cls, value: str) -> str:
+        clean = value.strip().lower()
+        if clean and clean not in ALLOWED_STANCES:
+            raise ValueError("Choose a valid stance")
+        return clean
+
+    @field_validator("training_goals")
+    @classmethod
+    def validate_training_goals(cls, value: list[str]) -> list[str]:
+        clean = list(dict.fromkeys(item.strip().lower() for item in value))
+        if any(item not in ALLOWED_GOALS for item in clean):
+            raise ValueError("Choose valid training goals")
+        return clean
+
+    @field_validator("measurement_units")
+    @classmethod
+    def validate_units(cls, value: str) -> str:
+        clean = value.strip().lower()
+        if clean not in ALLOWED_MEASUREMENT_UNITS:
+            raise ValueError("Choose valid measurement units")
+        return clean
+
+    @field_validator("coaching_style")
+    @classmethod
+    def validate_coaching_style(cls, value: str) -> str:
+        clean = value.strip().lower()
+        if clean not in ALLOWED_COACHING_STYLES:
+            raise ValueError("Choose a valid coaching style")
+        return clean
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8, max_length=128)
+
+
 def _valid_email(value: str) -> bool:
     return "@" in value and "." in value.rsplit("@", 1)[-1]
+
+
+def _detected_avatar_media_type(payload: bytes) -> str | None:
+    if payload.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if payload.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if len(payload) >= 12 and payload[:4] == b"RIFF" and payload[8:12] == b"WEBP":
+        return "image/webp"
+    return None
 
 
 def _token_hash(token: str) -> str:
@@ -245,6 +333,111 @@ def login(
 @router.get("/me")
 def me(user: User = Depends(get_current_user)):
     return account_payload(user)
+
+
+@router.patch("/me")
+def update_profile(
+    payload: ProfileUpdateRequest,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    _require_trusted_browser_origin(request)
+    if (user.email or "").lower().endswith("@guest.xmartialart.invalid"):
+        raise HTTPException(status_code=403, detail="Create an account to save a personal profile")
+
+    user.name = payload.name
+    user.primary_martial_art = payload.primary_martial_art or None
+    user.experience_level = payload.experience_level or None
+    user.preferred_stance = payload.preferred_stance or None
+    user.training_goals = json.dumps(payload.training_goals)
+    user.measurement_units = payload.measurement_units
+    user.coaching_style = payload.coaching_style
+    db.commit()
+    db.refresh(user)
+    return account_payload(user)
+
+
+@router.get("/me/avatar")
+def get_avatar(user: User = Depends(get_current_user)):
+    if not user.avatar_data or user.avatar_content_type not in AVATAR_MEDIA_TYPES:
+        raise HTTPException(status_code=404, detail="Profile image not found")
+    return Response(
+        content=user.avatar_data,
+        media_type=user.avatar_content_type,
+        headers={
+            "Cache-Control": "private, max-age=3600",
+            "Content-Disposition": "inline",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.put("/me/avatar")
+async def update_avatar(
+    request: Request,
+    avatar: UploadFile = File(...),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    _require_trusted_browser_origin(request)
+    if (user.email or "").lower().endswith("@guest.xmartialart.invalid"):
+        raise HTTPException(status_code=403, detail="Create an account to save a profile image")
+    if avatar.content_type not in AVATAR_MEDIA_TYPES:
+        raise HTTPException(status_code=415, detail="Choose a JPEG, PNG, or WebP image")
+
+    payload = await avatar.read(AVATAR_MAX_BYTES + 1)
+    await avatar.close()
+    if not payload:
+        raise HTTPException(status_code=400, detail="The selected image is empty")
+    if len(payload) > AVATAR_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Profile images must be 2 MB or smaller")
+
+    detected_type = _detected_avatar_media_type(payload)
+    if detected_type is None or detected_type != avatar.content_type:
+        raise HTTPException(status_code=415, detail="The file contents do not match a supported image format")
+
+    user.avatar_data = payload
+    user.avatar_content_type = detected_type
+    user.avatar_updated_at = _utcnow()
+    db.commit()
+    db.refresh(user)
+    return account_payload(user)
+
+
+@router.delete("/me/avatar")
+def delete_avatar(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    _require_trusted_browser_origin(request)
+    user.avatar_data = None
+    user.avatar_content_type = None
+    user.avatar_updated_at = None
+    db.commit()
+    return account_payload(user)
+
+
+@router.put("/account/password")
+def change_password(
+    payload: ChangePasswordRequest,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    _require_trusted_browser_origin(request)
+    if (user.email or "").lower().endswith("@guest.xmartialart.invalid"):
+        raise HTTPException(status_code=403, detail="Guest sessions do not have passwords")
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    if verify_password(payload.new_password, user.password_hash):
+        raise HTTPException(status_code=400, detail="New password must be different from the current password")
+
+    user.password_hash = hash_password(payload.new_password)
+    revoke_user_sessions(db, user.id, _utcnow())
+    db.commit()
+    return {"message": "Password updated. Sign in again with your new password."}
 
 
 @router.post("/refresh")

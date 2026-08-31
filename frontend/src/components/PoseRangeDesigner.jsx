@@ -1094,6 +1094,9 @@ export function PoseScene({
   onSelectJoint,
   onMoveJoint,
   onRotateJoint,
+  orbitEnablePan = true,
+  orbitMaxDistance = 12,
+  orbitMinDistance = 3,
 }) {
   const studio = useContext(PoseStudioContext);
   const { camera } = useThree();
@@ -1503,9 +1506,10 @@ export function PoseScene({
           space="world"
       /> : null}
       <OrbitControls
+        enablePan={orbitEnablePan}
         makeDefault
-        maxDistance={12}
-        minDistance={3}
+        maxDistance={orbitMaxDistance}
+        minDistance={orbitMinDistance}
         onChange={(event) => {
           if (!cameraViewRef || studio) return;
           cameraViewRef.current = {

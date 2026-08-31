@@ -1,7 +1,7 @@
 """Store one raw practice video per session in the database.
 
 Revision ID: f6c8a5d3e742
-Revises: e5b7f4a2c631
+Revises: fbf5a7c9d034
 Create Date: 2026-08-30
 """
 from typing import Sequence, Union
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 
 
 revision: str = "f6c8a5d3e742"
-down_revision: Union[str, Sequence[str], None] = "e5b7f4a2c631"
+down_revision: Union[str, Sequence[str], None] = "fbf5a7c9d034"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
