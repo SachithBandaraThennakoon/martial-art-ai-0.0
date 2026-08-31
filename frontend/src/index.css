@@ -7164,6 +7164,39 @@ select:focus {
   background: rgba(96, 211, 148, 0.12);
 }
 
+.practice-video-verification {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 6;
+  padding: 8px 11px;
+  border: 1px solid rgba(106, 168, 255, .42);
+  border-radius: 999px;
+  background: rgba(5, 12, 18, .86);
+  color: #bcd8ff;
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: .035em;
+  pointer-events: none;
+  backdrop-filter: blur(10px);
+}
+
+.practice-video-verification--recording::before {
+  content: "●";
+  margin-right: 6px;
+  color: #ff7c84;
+}
+
+.practice-video-verification--verified {
+  border-color: rgba(96, 211, 148, .52);
+  color: #78dfa5;
+}
+
+.practice-video-verification--fallback {
+  border-color: rgba(242, 185, 91, .48);
+  color: #f2c06b;
+}
+
 .mastery-threshold-control {
   display: grid;
   grid-template-columns: auto minmax(80px, 1fr) auto;

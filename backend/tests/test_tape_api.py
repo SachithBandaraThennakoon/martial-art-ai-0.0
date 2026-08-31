@@ -11,7 +11,12 @@ from sqlalchemy.pool import StaticPool
 import main
 from database import Base, get_db
 from models.technique import Technique
-from models.training_memory import PracticeRep, PracticeSession, PracticeSessionTape
+from models.training_memory import (
+    PracticeRep,
+    PracticeSession,
+    PracticeSessionTape,
+    PracticeSessionVideo,
+)
 from models.user import User
 from tests.test_tape_storage import valid_document
 from utils.security import create_access_token
@@ -146,6 +151,58 @@ class TapeAPITests(unittest.TestCase):
         self.assertEqual(len(reps), 1)
         self.assertEqual(reps[0].accuracy, 93)
         self.assertEqual(reps[0].duration_ms, 1400)
+
+    def test_raw_video_store_metadata_read_and_idempotent_retry(self):
+        raw_video = b"\x1aE\xdf\xa3mock-webm-video-payload"
+        key = "videouploadidempotency00000000001"
+        path = f"/practice/sessions/{self.session.id}/video"
+        headers = self.headers(
+            **{
+                "Content-Type": "video/webm;codecs=vp9",
+                "Idempotency-Key": key,
+                "X-Video-Duration-Ms": "12450",
+                "X-Video-Codec": "video/webm;codecs=vp9",
+            }
+        )
+
+        stored = self.client.put(path, headers=headers, content=raw_video)
+        self.assertEqual(stored.status_code, 200)
+        metadata = stored.json()
+        self.assertEqual(metadata["byte_size"], len(raw_video))
+        self.assertEqual(metadata["duration_ms"], 12450)
+        self.assertEqual(metadata["content_sha256"], hashlib.sha256(raw_video).hexdigest())
+
+        video = self.db.query(PracticeSessionVideo).one()
+        self.assertEqual(video.payload, raw_video)
+        self.assertEqual(video.mime_type, "video/webm;codecs=vp9")
+
+        retried = self.client.put(path, headers=headers, content=raw_video)
+        self.assertEqual(retried.status_code, 200)
+        self.assertTrue(retried.json()["idempotent"])
+        self.assertEqual(self.db.query(PracticeSessionVideo).count(), 1)
+
+        loaded_metadata = self.client.get(f"{path}/metadata", headers=self.headers())
+        self.assertEqual(loaded_metadata.status_code, 200)
+        self.assertEqual(loaded_metadata.json()["byte_size"], len(raw_video))
+
+        loaded_video = self.client.get(path, headers=self.headers())
+        self.assertEqual(loaded_video.status_code, 200)
+        self.assertEqual(loaded_video.content, raw_video)
+        self.assertEqual(loaded_video.headers["x-content-sha256"], metadata["content_sha256"])
+
+    def test_raw_video_rejects_unsupported_content_type(self):
+        response = self.client.put(
+            f"/practice/sessions/{self.session.id}/video",
+            headers=self.headers(
+                **{
+                    "Content-Type": "text/plain",
+                    "Idempotency-Key": "videouploadidempotency00000000002",
+                }
+            ),
+            content=b"not-video",
+        )
+        self.assertEqual(response.status_code, 415)
+        self.assertEqual(self.db.query(PracticeSessionVideo).count(), 0)
 
 
 if __name__ == "__main__":

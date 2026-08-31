@@ -1,9 +1,10 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 from collections import deque
 from datetime import datetime, timezone
+import hashlib
 import logging
 import os
 import re
@@ -33,6 +34,7 @@ from models.training_memory import (
     PracticeSession,
     PracticeSessionAnalytics,
     PracticeSessionTape,
+    PracticeSessionVideo,
     TemporalLabelingDraft,
     TrainingFeedbackEvent,
     TrainingSession,
@@ -99,6 +101,15 @@ logger = logging.getLogger(__name__)
 WS_MAX_MESSAGE_BYTES = max(1024, int(os.getenv("WS_MAX_MESSAGE_BYTES", "262144")))
 WS_MAX_MESSAGES_PER_SECOND = max(1, int(os.getenv("WS_MAX_MESSAGES_PER_SECOND", "60")))
 WS_MAX_SESSION_SECONDS = max(60, int(os.getenv("WS_MAX_SESSION_SECONDS", "900")))
+PRACTICE_VIDEO_MAX_BYTES = max(
+    1_048_576,
+    int(os.getenv("PRACTICE_VIDEO_MAX_BYTES", str(25 * 1024 * 1024))),
+)
+PRACTICE_VIDEO_MIME_TYPES = {
+    "video/webm",
+    "video/mp4",
+    "video/quicktime",
+}
 
 # -----------------------------
 # INIT APP
@@ -740,6 +751,123 @@ def get_practice_session_tape(
     }
 
 
+def _practice_video_metadata(video):
+    return {
+        "stored": True,
+        "session_id": video.practice_session_id,
+        "mime_type": video.mime_type,
+        "codec": video.codec,
+        "duration_ms": video.duration_ms,
+        "byte_size": video.byte_size,
+        "content_sha256": video.content_sha256,
+        "created_at": video.created_at.isoformat() if video.created_at else None,
+        "updated_at": video.updated_at.isoformat() if video.updated_at else None,
+        "download_path": f"/practice/sessions/{video.practice_session_id}/video",
+    }
+
+
+@app.put("/practice/sessions/{session_id}/video")
+async def store_practice_session_video(
+    session_id: int,
+    request: Request,
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+):
+    user_record = _get_user_from_token(db, token)
+    enforce_rate_limits(db, (TAPE_UPLOAD_USER, str(user_record.id)))
+    session = _get_user_practice_session(db, user_record.id, session_id)
+    idempotency_key = request.headers.get("Idempotency-Key", "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{16,64}", idempotency_key):
+        raise HTTPException(status_code=400, detail="A valid Idempotency-Key is required")
+
+    supplied_content_type = request.headers.get("content-type", "").strip().lower()
+    mime_type = supplied_content_type.split(";", 1)[0].strip()
+    if mime_type not in PRACTICE_VIDEO_MIME_TYPES:
+        raise HTTPException(status_code=415, detail="Only WebM, MP4, or QuickTime video is supported")
+    codec = request.headers.get("X-Video-Codec", "").strip()[:96] or None
+    try:
+        duration_ms = int(request.headers.get("X-Video-Duration-Ms", "0"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Video duration must be an integer") from exc
+    duration_ms = max(0, min(duration_ms, 900_000))
+
+    content_length = request.headers.get("content-length")
+    if content_length and content_length.isdigit() and int(content_length) > PRACTICE_VIDEO_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Practice video exceeds the upload limit")
+    raw_video = bytearray()
+    async for chunk in request.stream():
+        raw_video.extend(chunk)
+        if len(raw_video) > PRACTICE_VIDEO_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="Practice video exceeds the upload limit")
+    if not raw_video:
+        raise HTTPException(status_code=422, detail="Practice video is empty")
+
+    payload = bytes(raw_video)
+    content_sha256 = hashlib.sha256(payload).hexdigest()
+    video = db.query(PracticeSessionVideo).filter(
+        PracticeSessionVideo.practice_session_id == session.id
+    ).first()
+    if video:
+        if video.content_sha256 == content_sha256:
+            return {**_practice_video_metadata(video), "idempotent": True}
+        raise HTTPException(status_code=409, detail="A different video is already attached to this session")
+
+    video = PracticeSessionVideo(
+        practice_session_id=session.id,
+        mime_type=supplied_content_type[:96],
+        codec=codec,
+        duration_ms=duration_ms,
+        byte_size=len(payload),
+        content_sha256=content_sha256,
+        idempotency_key=idempotency_key,
+        payload=payload,
+    )
+    db.add(video)
+    db.commit()
+    db.refresh(video)
+    return _practice_video_metadata(video)
+
+
+@app.get("/practice/sessions/{session_id}/video/metadata")
+def get_practice_session_video_metadata(
+    session_id: int,
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+):
+    user_record = _get_user_from_token(db, token)
+    session = _get_user_practice_session(db, user_record.id, session_id)
+    video = db.query(PracticeSessionVideo).filter(
+        PracticeSessionVideo.practice_session_id == session.id
+    ).first()
+    if not video:
+        raise HTTPException(status_code=404, detail="No raw video is stored for this session")
+    return _practice_video_metadata(video)
+
+
+@app.get("/practice/sessions/{session_id}/video")
+def get_practice_session_video(
+    session_id: int,
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+):
+    user_record = _get_user_from_token(db, token)
+    session = _get_user_practice_session(db, user_record.id, session_id)
+    video = db.query(PracticeSessionVideo).filter(
+        PracticeSessionVideo.practice_session_id == session.id
+    ).first()
+    if not video:
+        raise HTTPException(status_code=404, detail="No raw video is stored for this session")
+    return Response(
+        content=video.payload,
+        media_type=video.mime_type,
+        headers={
+            "Content-Disposition": f'inline; filename="practice-session-{session.id}.webm"',
+            "Cache-Control": "private, no-store",
+            "X-Content-SHA256": video.content_sha256,
+        },
+    )
+
+
 @app.get("/research/export")
 def export_research_evidence(
     technique_name: str = "Jab",
@@ -902,6 +1030,12 @@ def get_practice_analysis(
 
     session_ids = [session.id for session in sessions]
     session_analytics = load_practice_analytics(db, session_ids)
+    session_videos = {
+        video.practice_session_id: video
+        for video in db.query(PracticeSessionVideo).filter(
+            PracticeSessionVideo.practice_session_id.in_(session_ids)
+        ).all()
+    } if session_ids else {}
     reps = []
     if session_ids:
         reps = db.query(PracticeRep).filter(
@@ -1085,6 +1219,7 @@ def get_practice_analysis(
             _practice_session_payload(
                 session,
                 session_analytics.get(session.id),
+                session_videos.get(session.id),
             )
             for session in sessions
         ]
@@ -1634,7 +1769,7 @@ def _practice_consistency_score(reps):
     return max(0, min(100, 100 - (variance ** 0.5)))
 
 
-def _practice_session_payload(session, analytics=None):
+def _practice_session_payload(session, analytics=None, video=None):
     payload = {
         "id": session.id,
         "technique_id": session.technique_id,
@@ -1654,6 +1789,8 @@ def _practice_session_payload(session, analytics=None):
     }
     if analytics:
         payload["analytics"] = analytics
+    if video:
+        payload["raw_video"] = _practice_video_metadata(video)
     return payload
 
 

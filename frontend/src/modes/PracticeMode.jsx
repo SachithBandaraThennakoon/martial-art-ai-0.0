@@ -50,6 +50,10 @@ import {
   summarizePracticeSourceTiming
 } from "../utils/practiceTiming";
 import {
+  buildPracticeVideoReplayFrames,
+  isUsablePracticeVideoReplay
+} from "../utils/practiceVideoReplay";
+import {
   selectLatestPracticeSession,
   sortPracticeSessions
 } from "../utils/practiceSessionSelectors";
@@ -1308,6 +1312,8 @@ export default function PracticeMode({
   const [recoveryRemainingMs, setRecoveryRemainingMs] = useState(0);
   const [diagnosticTraceActive, setDiagnosticTraceActive] = useState(false);
   const [diagnosticTraceCount, setDiagnosticTraceCount] = useState(0);
+  const [videoVerificationStatus, setVideoVerificationStatus] = useState("idle");
+  const [videoPersistenceStatus, setVideoPersistenceStatus] = useState("idle");
   const ruleEngineResultRef = useRef(null);
   const ruleEngineWaitersRef = useRef(new Set());
   const handleRuleEngineSessionComplete = useCallback((summary) => {
@@ -1433,6 +1439,8 @@ export default function PracticeMode({
   const completedMovementRepsRef = useRef(new Set());
   const completeMovementRepRef = useRef(null);
   const pendingRepWritesRef = useRef(new Set());
+  const practiceVideoControllerRef = useRef(null);
+  const practiceVideoCaptureOffsetMsRef = useRef(0);
   const recordFrameRef = useRef(null);
   const numberAudioRef = useRef([]);
   const recognitionRef = useRef(null);
@@ -1453,6 +1461,9 @@ export default function PracticeMode({
   const lastDiagnosticCountUiAtRef = useRef(0);
   const lastDiagnosticTemporalEventRef = useRef("");
   const lastDiagnosticCueRef = useRef(0);
+  const handlePracticeVideoController = useCallback((controller) => {
+    practiceVideoControllerRef.current = controller;
+  }, []);
   const lastDiagnosticRepRef = useRef(0);
   const lastDiagnosticSessionStatusRef = useRef(null);
   const diagnosticRecorderRef = useRef(null);
@@ -2384,6 +2395,36 @@ export default function PracticeMode({
     }
   }, []);
 
+  const storePracticeVideo = useCallback(async (
+    sessionId,
+    videoBlob,
+    { durationMs = 0, codec = null } = {}
+  ) => {
+    const token = getAccessToken();
+    if (!sessionId || !token || !videoBlob?.size) return null;
+
+    try {
+      const idempotencyKey = crypto.randomUUID().replaceAll("-", "");
+      const response = await authFetch(
+        `${API_BASE_URL}/practice/sessions/${sessionId}/video`,
+        {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": videoBlob.type || "video/webm",
+            "Idempotency-Key": idempotencyKey,
+            "X-Video-Duration-Ms": String(Math.max(0, Math.round(durationMs))),
+            ...(codec ? { "X-Video-Codec": codec } : {})
+          },
+          body: videoBlob
+        }
+      );
+      return response.ok ? response.json() : null;
+    } catch {
+      return null;
+    }
+  }, []);
+
   const clearCountBeatTimers = useCallback(() => {
     countBeatTimersRef.current.forEach((timerId) => window.clearTimeout(timerId));
     countBeatTimersRef.current = [];
@@ -2543,8 +2584,76 @@ export default function PracticeMode({
         recordFrameRef.current?.();
         const setStart = setStartedAtRef.current || performance.now();
         const tapeDurationMs = Math.max(0, Math.round(performance.now() - setStart));
+        let analysisSourceFrames = recordedFramesRef.current;
+        let videoReplayMetadata = null;
+        let rawVideoBlob = null;
+        let recordedVideoDurationMs = 0;
+        const videoController = practiceVideoControllerRef.current;
+        if (
+          inputSource === "live" &&
+          currentTechnique?.name?.trim().toLowerCase() === "jab" &&
+          videoController?.stop &&
+          videoController?.analyze
+        ) {
+          try {
+            setVideoVerificationStatus("analyzing");
+            rawVideoBlob = await videoController.stop();
+            const replay = rawVideoBlob
+              ? await videoController.analyze(rawVideoBlob, { sampleFps: 15 })
+              : null;
+            recordedVideoDurationMs = Number(replay?.durationMs) || 0;
+            const replayQuality = isUsablePracticeVideoReplay(replay);
+            if (replayQuality.usable) {
+              analysisSourceFrames = buildPracticeVideoReplayFrames({
+                frames: replay.frames,
+                steps,
+                captureOffsetMs: practiceVideoCaptureOffsetMsRef.current
+              });
+              videoReplayMetadata = {
+                authoritative: true,
+                frameCount: replayQuality.frameCount,
+                effectiveFps: Number(replayQuality.effectiveFps.toFixed(2)),
+                sampleFps: replay.sampleFps,
+                sourceVideoFps: replay.videoFrameRate,
+                durationMs: replay.durationMs,
+                retained: false
+              };
+              setVideoVerificationStatus("verified");
+            } else {
+              setVideoVerificationStatus("fallback");
+            }
+          } catch (error) {
+            console.error("Recorded Practice verification failed", error);
+            setVideoVerificationStatus("fallback");
+          }
+        }
+        const captureSessionId = sessionRef.current?.id;
+        let storedVideoMetadata = null;
+        if (rawVideoBlob && captureSessionId) {
+          setVideoPersistenceStatus("uploading");
+          storedVideoMetadata = await storePracticeVideo(
+            captureSessionId,
+            rawVideoBlob,
+            {
+              durationMs: recordedVideoDurationMs,
+              codec: rawVideoBlob.type || null
+            }
+          );
+          setVideoPersistenceStatus(storedVideoMetadata ? "stored" : "failed");
+          if (videoReplayMetadata) {
+            videoReplayMetadata.retained = Boolean(storedVideoMetadata);
+            videoReplayMetadata.storage = storedVideoMetadata
+              ? {
+                  provider: "database",
+                  byteSize: storedVideoMetadata.byte_size,
+                  contentSha256: storedVideoMetadata.content_sha256,
+                  downloadPath: storedVideoMetadata.download_path
+                }
+              : null;
+          }
+        }
         const analyzedTape = analyzePracticeTape({
-          sourceFrames: recordedFramesRef.current,
+          sourceFrames: analysisSourceFrames,
           durationMs: tapeDurationMs,
           steps,
           targetReps,
@@ -2579,6 +2688,10 @@ export default function PracticeMode({
           techniqueName: currentTechnique?.name || "Practice",
           biomechanicsSchema: "observed-filtered-measurement-aggregate-v2",
           postSessionClassification: true,
+          analysisAuthority: videoReplayMetadata
+            ? "recorded-video"
+            : "live-pose-tape",
+          videoReplay: videoReplayMetadata,
           frameOrganizationVersion: 2,
           clusteredCompletedReps:
             correctedCompletedReps,
@@ -2602,7 +2715,7 @@ export default function PracticeMode({
               audioStartLatencyMs: countMarker.audioStartLatencyMs ?? null
             })),
             sourceTiming: summarizePracticeSourceTiming(
-              recordedFramesRef.current.filter(
+              analysisSourceFrames.filter(
                 (frame) =>
                   frame.elapsedMs >= classificationArmedAtElapsedMsRef.current
               )
@@ -2619,6 +2732,17 @@ export default function PracticeMode({
         };
         const activeSessionId = sessionRef.current?.id;
         clearCountBeatTimers();
+        await Promise.all(
+          correctedAnalysis.repetitions
+            .filter((repetition) => repetition.status === "completed")
+            .map((repetition) => postPracticeRep(
+              repetition.rep,
+              Number(repetition.average_accuracy) || 0,
+              Number(repetition.duration_ms) || 0,
+              repetition.errors?.[0] || null,
+              repetition.errors?.[0] || null
+            ))
+        );
         await completePracticeSession(
           completed ? "completed" : "cancelled",
           correctedSummary
@@ -2652,14 +2776,19 @@ export default function PracticeMode({
         }
         const averageAccuracy = Math.round(correctedSummary.average_accuracy || 0);
         const cleanCount = correctedSummary.clean_reps || 0;
+        const verificationMessage = videoReplayMetadata
+          ? storedVideoMetadata
+            ? "The result was verified from the recorded set, and the raw video was saved."
+            : "The result was verified from the recorded set, but raw-video storage failed."
+          : "The result uses the live pose tape.";
         const message = completed
           ? `Set finished. ${correctedCompletedReps} of ${targetReps} reps completed, ` +
             `${cleanCount} clean, with ${averageAccuracy} percent average accuracy. ` +
-            "Your full session analysis is ready."
+            `${verificationMessage} Your full session analysis is ready.`
           : `Set ended. ${correctedCompletedReps} of ${targetReps} reps completed, ` +
             `${cleanCount} clean, with ${averageAccuracy} percent average accuracy. ` +
             `${remaining} ${remaining === 1 ? "rep was" : "reps were"} incomplete. ` +
-            "Keep your body in view and try again.";
+            `${verificationMessage} Keep your body in view and try again.`;
         setAssistantMessage(message);
         sayPractice(message, {
           force: true,
@@ -2685,11 +2814,14 @@ export default function PracticeMode({
     completePracticeSession,
     countGapMs,
     currentTechnique,
+    inputSource,
     loadPracticeAnalysis,
     playPracticeAudio,
+    postPracticeRep,
     sayPractice,
     steps,
     storePracticeTape,
+    storePracticeVideo,
     targetReps,
     textEnabled,
     waitForRuleEngineResult,
@@ -2826,6 +2958,8 @@ export default function PracticeMode({
     setFullTapeCursor(0);
     setIsFullTapePlaying(false);
     setIsTapePopupOpen(false);
+    setVideoVerificationStatus("idle");
+    setVideoPersistenceStatus("idle");
     recordedFramesRef.current = [];
     countMarkersRef.current = [];
     previousRecordedLandmarksRef.current = [];
@@ -2943,8 +3077,21 @@ export default function PracticeMode({
       0,
       performance.now() - (setStartedAtRef.current || performance.now())
     );
+    practiceVideoCaptureOffsetMsRef.current =
+      classificationArmedAtElapsedMsRef.current;
+    if (
+      inputSource === "live" &&
+      currentTechnique?.name?.trim().toLowerCase() === "jab"
+    ) {
+      const capture = practiceVideoControllerRef.current?.start?.();
+      if (capture) setVideoVerificationStatus("recording");
+      if (capture) setVideoPersistenceStatus("recording");
+    }
     await new Promise((resolve) => window.setTimeout(resolve, PRACTICE_PRE_ROLL_MS));
     if (requestId !== voiceRequestIdRef.current) {
+      void practiceVideoControllerRef.current?.discard?.();
+      setVideoVerificationStatus("idle");
+      setVideoPersistenceStatus("idle");
       clearCountBeatTimers();
       return;
     }
@@ -2958,6 +3105,7 @@ export default function PracticeMode({
     currentTechnique,
     fetchPracticeVoice,
     playPracticeAudio,
+    inputSource,
     sayPractice,
     steps,
     stopPracticeVoice,
@@ -2970,6 +3118,9 @@ export default function PracticeMode({
   }, [startPracticeForStep]);
 
   const resetPractice = useCallback(() => {
+    void practiceVideoControllerRef.current?.discard?.();
+    setVideoVerificationStatus("idle");
+    setVideoPersistenceStatus("idle");
     completePracticeSession("cancelled");
     clearCountBeatTimers();
     stopPracticeVoice();
@@ -3031,6 +3182,9 @@ export default function PracticeMode({
       completePracticeSession("cancelled");
     }
     clearCountBeatTimers();
+    void practiceVideoControllerRef.current?.discard?.();
+    setVideoVerificationStatus("idle");
+    setVideoPersistenceStatus("idle");
     setSession(null);
     sessionRef.current = null;
     setSelectedStepIndex(nextIndex);
@@ -3509,6 +3663,7 @@ export default function PracticeMode({
           feedbackParts={practiceFeedbackParts}
           onAngleUpdate={handleAngleUpdate}
           onLandmarkFrame={handleLandmarkFrame}
+          onPracticeVideoController={handlePracticeVideoController}
           temporalCue={temporalCue}
           temporalSessionId={temporalSessionId}
           trackingSessionActive={isPracticeActive}
@@ -3540,6 +3695,28 @@ export default function PracticeMode({
                 isReadyForRep
               })}
             </small>
+          </div>
+        ) : null}
+        {videoVerificationStatus !== "idle" ? (
+          <div
+            className={`practice-video-verification practice-video-verification--${videoVerificationStatus}`}
+            role="status"
+          >
+            {videoVerificationStatus === "recording"
+              ? "Live count · provisional · recording raw video"
+              : videoVerificationStatus === "analyzing"
+                ? videoPersistenceStatus === "uploading"
+                  ? "Verifying the set · saving raw video…"
+                  : "Verifying the recorded set frame by frame…"
+                : videoVerificationStatus === "verified"
+                  ? videoPersistenceStatus === "stored"
+                    ? "Recorded-video result verified · raw video saved in database"
+                    : videoPersistenceStatus === "failed"
+                      ? "Recorded-video result verified · raw-video save failed"
+                      : "Recorded-video result verified"
+                  : videoPersistenceStatus === "stored"
+                    ? "Live pose fallback · raw video saved in database"
+                    : "Video verification unavailable · using live pose tape"}
           </div>
         ) : null}
       </section>
@@ -3759,7 +3936,7 @@ export default function PracticeMode({
         {DIAGNOSTIC_TRACE_ENABLED ? (
           <DiagnosticTraceControls
             active={diagnosticTraceActive}
-            description="Captures compact landmarks and angles at 5 Hz, plus the Jab rule classifier, evidence scores, canonical phases, transitions, cues, reps, and the full analysis pipeline every second. No camera video is stored."
+            description="Captures compact landmarks and angles at 5 Hz, plus the Jab rule classifier, evidence scores, canonical phases, transitions, cues, reps, and the full analysis pipeline every second. Practice recordings are stored separately as private raw session video."
             recordCount={diagnosticTraceCount}
             onClear={clearDiagnosticTrace}
             onDownload={downloadTrace}
@@ -3879,6 +4056,7 @@ export default function PracticeMode({
                           historySession.target_reps
                             ? "Completed"
                             : "Incomplete"}
+                          {historySession.raw_video ? " · Raw video saved" : ""}
                         </small>
                       </span>
                       <span>

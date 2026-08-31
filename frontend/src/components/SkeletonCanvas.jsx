@@ -221,6 +221,49 @@ function hasVisiblePoints(points) {
   );
 }
 
+function calculateMeasurementAngles(parts, imagePose, worldPose) {
+  const angles = {};
+  (parts || []).forEach((part) => {
+    const mapping = BODY_PART_MAP[part.body_part];
+    if (!mapping) return;
+    const [a, b, c] = mapping;
+    const landmarks = selectAngleLandmarks(
+      part.body_part,
+      imagePose,
+      worldPose
+    );
+    const points = [landmarks?.[a], landmarks?.[b], landmarks?.[c]];
+    if (!hasVisiblePoints(points)) return;
+    const angle = isImagePlaneAnglePart(part.body_part)
+      ? calculateImageAngle(points[0], points[1], points[2])
+      : calculateSpatialAngle(points[0], points[1], points[2]);
+    if (Number.isFinite(angle)) angles[part.body_part] = angle;
+  });
+  return angles;
+}
+
+function waitForVideoEvent(video, eventName) {
+  return new Promise((resolve, reject) => {
+    let timerId;
+    const cleanup = () => {
+      window.clearTimeout(timerId);
+      video.removeEventListener(eventName, handleEvent);
+      video.removeEventListener("error", handleError);
+    };
+    const handleEvent = () => {
+      cleanup();
+      resolve();
+    };
+    const handleError = () => {
+      cleanup();
+      reject(new Error(`Recorded video ${eventName} failed`));
+    };
+    video.addEventListener(eventName, handleEvent, { once: true });
+    video.addEventListener("error", handleError, { once: true });
+    timerId = window.setTimeout(handleError, 10_000);
+  });
+}
+
 function distance(first, second) {
   return Math.hypot(
     first.x - second.x,
@@ -752,6 +795,7 @@ export default function SkeletonCanvas({
   onRuleEngineFrameUpdate,
   onRuleEngineSessionComplete,
   onLandmarkFrame,
+  onPracticeVideoController,
   capturePoseOnly = false,
   temporalCue,
   temporalSessionId,
@@ -777,6 +821,12 @@ export default function SkeletonCanvas({
   const poseRef = useRef(null);
   const handRef = useRef(null);
   const faceRef = useRef(null);
+  const practiceRecorderRef = useRef(null);
+  const practiceRecorderChunksRef = useRef([]);
+  const practiceRecorderStartedAtRef = useRef(null);
+  const practiceRecorderTypeRef = useRef("video/webm");
+  const practiceVideoFrameRateRef = useRef(null);
+  const replayActiveRef = useRef(false);
   const visionRef = useRef(null);
   const wsRef = useRef(null);
   const previousPoseRef = useRef(null);
@@ -869,6 +919,175 @@ export default function SkeletonCanvas({
   });
   const syntheticHandClosureRef = useRef(syntheticHandClosure);
   const draggedSyntheticJointRef = useRef(null);
+
+  const stopPracticeVideoCapture = useCallback(() => {
+    const recorder = practiceRecorderRef.current;
+    if (!recorder) return Promise.resolve(null);
+    if (recorder.state === "inactive") {
+      practiceRecorderRef.current = null;
+      const chunks = practiceRecorderChunksRef.current;
+      practiceRecorderChunksRef.current = [];
+      return Promise.resolve(
+        chunks.length
+          ? new Blob(chunks, {
+              type: practiceRecorderTypeRef.current
+            })
+          : null
+      );
+    }
+    return new Promise((resolve) => {
+      recorder.addEventListener("stop", () => {
+        const chunks = practiceRecorderChunksRef.current;
+        practiceRecorderChunksRef.current = [];
+        const blob = chunks.length
+          ? new Blob(chunks, {
+              type: practiceRecorderTypeRef.current
+            })
+          : null;
+        practiceRecorderRef.current = null;
+        resolve(blob);
+      }, { once: true });
+      recorder.stop();
+    });
+  }, []);
+
+  const startPracticeVideoCapture = useCallback(() => {
+    if (
+      inputSource !== "live" ||
+      typeof MediaRecorder === "undefined" ||
+      practiceRecorderRef.current?.state === "recording"
+    ) {
+      return null;
+    }
+    const sourceStream = videoRef.current?.srcObject;
+    const videoTracks = sourceStream?.getVideoTracks?.() || [];
+    if (!videoTracks.length) return null;
+
+    const preferredTypes = [
+      "video/webm;codecs=vp9",
+      "video/webm;codecs=vp8",
+      "video/webm"
+    ];
+    const mimeType = preferredTypes.find(
+      (type) => MediaRecorder.isTypeSupported?.(type)
+    ) || "";
+    const recorder = new MediaRecorder(
+      new MediaStream(videoTracks),
+      mimeType ? { mimeType, videoBitsPerSecond: 1_500_000 } : undefined
+    );
+    practiceRecorderChunksRef.current = [];
+    practiceRecorderTypeRef.current = mimeType || recorder.mimeType || "video/webm";
+    practiceVideoFrameRateRef.current = Number(
+      videoTracks[0]?.getSettings?.().frameRate
+    ) || null;
+    practiceRecorderStartedAtRef.current = performance.now();
+    recorder.addEventListener("dataavailable", (event) => {
+      if (event.data?.size) practiceRecorderChunksRef.current.push(event.data);
+    });
+    recorder.start(1000);
+    practiceRecorderRef.current = recorder;
+    return { startedAtMs: practiceRecorderStartedAtRef.current };
+  }, [inputSource]);
+
+  const analyzePracticeVideoCapture = useCallback(async (
+    blob,
+    { sampleFps = 15, maximumDurationMs = 300_000 } = {}
+  ) => {
+    if (!blob?.size || !poseRef.current) return null;
+    const replayVideo = document.createElement("video");
+    const objectUrl = URL.createObjectURL(blob);
+    replayVideo.muted = true;
+    replayVideo.playsInline = true;
+    replayVideo.preload = "auto";
+    replayVideo.src = objectUrl;
+    replayActiveRef.current = true;
+    try {
+      await waitForVideoEvent(replayVideo, "loadeddata");
+      const durationMs = Math.min(
+        Number(replayVideo.duration) * 1000,
+        maximumDurationMs
+      );
+      if (!Number.isFinite(durationMs) || durationMs <= 0) return null;
+      const intervalMs = 1000 / Math.max(8, Math.min(30, sampleFps));
+      let replayTimestampMs = performance.now();
+      const frames = [];
+      for (let elapsedMs = 0; elapsedMs <= durationMs; elapsedMs += intervalMs) {
+        const targetSeconds = Math.min(elapsedMs / 1000, replayVideo.duration);
+        if (Math.abs(replayVideo.currentTime - targetSeconds) > 0.001) {
+          replayVideo.currentTime = targetSeconds;
+          await waitForVideoEvent(replayVideo, "seeked");
+        }
+        replayTimestampMs = Math.max(performance.now(), replayTimestampMs + 1);
+        const result = poseRef.current.detectForVideo(
+          replayVideo,
+          replayTimestampMs
+        );
+        const pose = result.landmarks?.[0]?.map((point) => ({ ...point })) || [];
+        if (pose.length) {
+          const worldPose = result.worldLandmarks?.[0]?.map(
+            (point) => ({ ...point })
+          ) || pose;
+          const angles = calculateMeasurementAngles(
+            measurementPartsRef.current,
+            pose,
+            worldPose
+          );
+          const trackingConfidence = pose.reduce(
+            (total, point) => total + Number(point.visibility ?? point.presence ?? 1),
+            0
+          ) / pose.length;
+          frames.push({
+            elapsedMs,
+            pose,
+            measurementPose: worldPose,
+            angles,
+            trackingConfidence
+          });
+        }
+        if (frames.length && frames.length % 12 === 0) {
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
+      }
+      return {
+        frames,
+        durationMs,
+        sampleFps,
+        videoFrameRate: practiceVideoFrameRateRef.current
+      };
+    } finally {
+      replayActiveRef.current = false;
+      replayVideo.pause();
+      replayVideo.removeAttribute("src");
+      replayVideo.load();
+      URL.revokeObjectURL(objectUrl);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!onPracticeVideoController) return undefined;
+    onPracticeVideoController({
+      start: startPracticeVideoCapture,
+      stop: stopPracticeVideoCapture,
+      analyze: analyzePracticeVideoCapture,
+      discard: async () => {
+        await stopPracticeVideoCapture();
+        practiceRecorderChunksRef.current = [];
+      }
+    });
+    return () => {
+      if (practiceRecorderRef.current?.state === "recording") {
+        practiceRecorderRef.current.stop();
+      }
+      practiceRecorderRef.current = null;
+      practiceRecorderChunksRef.current = [];
+      onPracticeVideoController(null);
+    };
+  }, [
+    analyzePracticeVideoCapture,
+    onPracticeVideoController,
+    startPracticeVideoCapture,
+    stopPracticeVideoCapture
+  ]);
 
   const moveSyntheticJoint = useCallback((event) => {
     const jointIndex = draggedSyntheticJointRef.current;
@@ -1547,6 +1766,10 @@ export default function SkeletonCanvas({
         scheduleDelayedDetection(250);
         return;
       }
+      if (replayActiveRef.current) {
+        scheduleDelayedDetection(50);
+        return;
+      }
 
       // A coach question owns the turn. Freeze vision inference and temporal
       // calculations while waiting so CPU/GPU work cannot compete with speech
@@ -1901,35 +2124,14 @@ export default function SkeletonCanvas({
           level4State,
           mode: enableCoachRef.current ? "train" : "practice"
         });
-        const anglesPayload = { ...auxiliaryScores };
-
-        measurementPartsRef.current?.forEach((part) => {
-          const mapping = BODY_PART_MAP[part.body_part];
-
-          if (mapping) {
-            const [a, b, c] = mapping;
-            const angleLandmarks = selectAngleLandmarks(
-              part.body_part,
-              frame.pose,
-              frame.worldPose
-            );
-            const points = [
-              angleLandmarks?.[a],
-              angleLandmarks?.[b],
-              angleLandmarks?.[c]
-            ];
-
-            if (hasVisiblePoints(points)) {
-              const angle = isImagePlaneAnglePart(part.body_part)
-                ? calculateImageAngle(points[0], points[1], points[2])
-                : calculateSpatialAngle(points[0], points[1], points[2]);
-
-              if (Number.isFinite(angle)) {
-                anglesPayload[part.body_part] = angle;
-              }
-            }
-          }
-        });
+        const anglesPayload = {
+          ...auxiliaryScores,
+          ...calculateMeasurementAngles(
+            measurementPartsRef.current,
+            frame.pose,
+            frame.worldPose
+          )
+        };
 
         if (situationAwarenessState?.situation_context) {
           const targetStatus = (feedbackPartsRef.current || []).map((target) => {

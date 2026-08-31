@@ -2,7 +2,7 @@ from datetime import date, datetime, timezone
 import json
 
 
-PRIVACY_NOTICE_VERSION = "2026-08-03"
+PRIVACY_NOTICE_VERSION = "2026-08-30"
 TERMS_VERSION = "2026-08-03"
 AGE_POLICY_VERSION = "2026-08-03"
 MINIMUM_AGE = 18

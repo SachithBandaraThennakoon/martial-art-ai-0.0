@@ -16,6 +16,7 @@ from models.training_memory import (
     PracticeSession,
     PracticeSessionAnalytics,
     PracticeSessionTape,
+    PracticeSessionVideo,
     TemporalLabelingDraft,
     TrainingFeedbackEvent,
     TrainingSession,
@@ -67,6 +68,7 @@ def export_account(user: User = Depends(get_current_user), db: Session = Depends
     provider_ids = [row.provider_subscription_id for row in subscriptions]
     calibrations = db.query(BodyCalibration).filter(BodyCalibration.user_id == user.id).all()
     analytics = db.query(PracticeSessionAnalytics).filter(PracticeSessionAnalytics.practice_session_id.in_(practice_ids)).all() if practice_ids else []
+    videos = db.query(PracticeSessionVideo).filter(PracticeSessionVideo.practice_session_id.in_(practice_ids)).all() if practice_ids else []
 
     return {
         "export_schema_version": EXPORT_SCHEMA_VERSION,
@@ -87,6 +89,7 @@ def export_account(user: User = Depends(get_current_user), db: Session = Depends
             "repetitions": [model_payload(row) for row in db.query(PracticeRep).filter(PracticeRep.practice_session_id.in_(practice_ids)).all()] if practice_ids else [],
             "analytics": [{**model_payload(row, exclude={"payload"}), "data": parsed_json(row.payload)} for row in analytics],
             "tapes": [{**model_payload(row, exclude={"payload", "blob_name"}), "download_path": f"/practice/sessions/{row.practice_session_id}/tape"} for row in db.query(PracticeSessionTape).filter(PracticeSessionTape.practice_session_id.in_(practice_ids)).all()] if practice_ids else [],
+            "videos": [{**model_payload(row, exclude={"payload"}), "download_path": f"/practice/sessions/{row.practice_session_id}/video"} for row in videos],
         },
         "billing": {
             "subscriptions": [model_payload(row) for row in subscriptions],
@@ -135,6 +138,7 @@ async def delete_account(
 
     try:
         if practice_ids:
+            db.query(PracticeSessionVideo).filter(PracticeSessionVideo.practice_session_id.in_(practice_ids)).delete(synchronize_session=False)
             db.query(PracticeSessionTape).filter(PracticeSessionTape.practice_session_id.in_(practice_ids)).delete(synchronize_session=False)
             db.query(PracticeSessionAnalytics).filter(PracticeSessionAnalytics.practice_session_id.in_(practice_ids)).delete(synchronize_session=False)
             db.query(PracticeRep).filter(PracticeRep.practice_session_id.in_(practice_ids)).delete(synchronize_session=False)

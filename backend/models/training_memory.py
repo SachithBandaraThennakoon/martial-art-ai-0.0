@@ -129,6 +129,32 @@ class PracticeSessionTape(Base):
     )
 
 
+class PracticeSessionVideo(Base):
+    __tablename__ = "practice_session_videos"
+
+    id = Column(Integer, primary_key=True, index=True)
+    practice_session_id = Column(
+        Integer,
+        ForeignKey("practice_sessions.id"),
+        nullable=False,
+        unique=True,
+        index=True
+    )
+    mime_type = Column(String(96), nullable=False, default="video/webm")
+    codec = Column(String(96), nullable=True)
+    duration_ms = Column(Integer, default=0)
+    byte_size = Column(Integer, nullable=False, default=0)
+    content_sha256 = Column(String(64), nullable=False, index=True)
+    idempotency_key = Column(String(64), nullable=False)
+    payload = Column(LargeBinary, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now()
+    )
+
+
 class PracticeSessionAnalytics(Base):
     __tablename__ = "practice_session_analytics"
 
