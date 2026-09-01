@@ -13714,7 +13714,7 @@ select:focus {
   backdrop-filter: blur(18px);
 }
 
-.account-sidebar { align-self: start; padding: 20px; }
+.account-sidebar { align-self: stretch; padding: 20px; }
 .account-workspace { min-width: 0; overflow: hidden; }
 .account-identity { display: flex; align-items: center; gap: 13px; padding: 4px 2px 20px; }
 .account-identity > div { min-width: 0; }
