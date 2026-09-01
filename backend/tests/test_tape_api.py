@@ -68,6 +68,12 @@ class TapeAPITests(unittest.TestCase):
     def test_inline_intent_store_read_and_idempotent_retry(self):
         document = valid_document()
         document["metadata"]["sessionId"] = self.session.id
+        document["metadata"]["analysisAuthority"] = "recorded-video"
+        document["metadata"]["videoReplay"] = {
+            "authoritative": True,
+            "frameCount": 42,
+            "retained": True,
+        }
         raw = json.dumps(document, separators=(",", ":"))
         digest = hashlib.sha256(raw.encode()).hexdigest()
         key = "tapeuploadidempotency000000000001"

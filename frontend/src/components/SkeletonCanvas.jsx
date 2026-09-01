@@ -243,6 +243,9 @@ function calculateMeasurementAngles(parts, imagePose, worldPose) {
 }
 
 function waitForVideoEvent(video, eventName) {
+  if (eventName === "loadeddata" && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+    return Promise.resolve();
+  }
   return new Promise((resolve, reject) => {
     let timerId;
     const cleanup = () => {
@@ -993,9 +996,10 @@ export default function SkeletonCanvas({
     blob,
     { sampleFps = 15, maximumDurationMs = 300_000 } = {}
   ) => {
-    if (!blob?.size || !poseRef.current) return null;
+    if (!blob?.size) return null;
     const replayVideo = document.createElement("video");
     const objectUrl = URL.createObjectURL(blob);
+    let replayLandmarker = null;
     replayVideo.muted = true;
     replayVideo.playsInline = true;
     replayVideo.preload = "auto";
@@ -1009,16 +1013,26 @@ export default function SkeletonCanvas({
       );
       if (!Number.isFinite(durationMs) || durationMs <= 0) return null;
       const intervalMs = 1000 / Math.max(8, Math.min(30, sampleFps));
+      const replayVision = visionRef.current || await FilesetResolver.forVisionTasks(
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.32/wasm"
+      );
+      replayLandmarker = await PoseLandmarker.createFromOptions(replayVision, {
+        baseOptions: {
+          modelAssetPath:
+            "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task"
+        },
+        runningMode: "VIDEO",
+        numPoses: 1
+      });
       let replayTimestampMs = performance.now();
+      let lastSampledElapsedMs = -intervalMs;
       const frames = [];
-      for (let elapsedMs = 0; elapsedMs <= durationMs; elapsedMs += intervalMs) {
-        const targetSeconds = Math.min(elapsedMs / 1000, replayVideo.duration);
-        if (Math.abs(replayVideo.currentTime - targetSeconds) > 0.001) {
-          replayVideo.currentTime = targetSeconds;
-          await waitForVideoEvent(replayVideo, "seeked");
-        }
+
+      const analyzeFrame = (elapsedMs) => {
+        if (elapsedMs - lastSampledElapsedMs < intervalMs * 0.85) return;
+        lastSampledElapsedMs = elapsedMs;
         replayTimestampMs = Math.max(performance.now(), replayTimestampMs + 1);
-        const result = poseRef.current.detectForVideo(
+        const result = replayLandmarker.detectForVideo(
           replayVideo,
           replayTimestampMs
         );
@@ -1044,10 +1058,69 @@ export default function SkeletonCanvas({
             trackingConfidence
           });
         }
-        if (frames.length && frames.length % 12 === 0) {
-          await new Promise((resolve) => requestAnimationFrame(resolve));
-        }
-      }
+      };
+
+      replayVideo.playbackRate = 2;
+      await new Promise((resolve, reject) => {
+        let settled = false;
+        let callbackId = null;
+        let fallbackFrameId = null;
+        const timeoutMs = Math.min(
+          90_000,
+          Math.max(20_000, Math.ceil(durationMs / replayVideo.playbackRate) + 20_000)
+        );
+        const timerId = window.setTimeout(() => {
+          finish(new Error("Recorded video analysis timed out"));
+        }, timeoutMs);
+
+        const cleanup = () => {
+          window.clearTimeout(timerId);
+          replayVideo.removeEventListener("ended", handleEnded);
+          replayVideo.removeEventListener("error", handleError);
+          if (callbackId != null && replayVideo.cancelVideoFrameCallback) {
+            replayVideo.cancelVideoFrameCallback(callbackId);
+          }
+          if (fallbackFrameId != null) cancelAnimationFrame(fallbackFrameId);
+        };
+        const finish = (error = null) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          if (error) reject(error);
+          else resolve();
+        };
+        const handleEnded = () => finish();
+        const handleError = () => finish(new Error("Recorded video playback failed"));
+        const scheduleFrame = () => {
+          if (settled) return;
+          if (replayVideo.requestVideoFrameCallback) {
+            callbackId = replayVideo.requestVideoFrameCallback(handleFrame);
+          } else {
+            fallbackFrameId = requestAnimationFrame(() => {
+              handleFrame(performance.now(), { mediaTime: replayVideo.currentTime });
+            });
+          }
+        };
+        const handleFrame = (_now, metadata) => {
+          if (settled) return;
+          try {
+            analyzeFrame(Math.min((metadata.mediaTime || 0) * 1000, durationMs));
+          } catch (error) {
+            finish(error);
+            return;
+          }
+          if (replayVideo.ended || replayVideo.currentTime * 1000 >= durationMs) {
+            finish();
+            return;
+          }
+          scheduleFrame();
+        };
+
+        replayVideo.addEventListener("ended", handleEnded, { once: true });
+        replayVideo.addEventListener("error", handleError, { once: true });
+        scheduleFrame();
+        replayVideo.play().catch(handleError);
+      });
       return {
         frames,
         durationMs,
@@ -1056,6 +1129,7 @@ export default function SkeletonCanvas({
       };
     } finally {
       replayActiveRef.current = false;
+      replayLandmarker?.close?.();
       replayVideo.pause();
       replayVideo.removeAttribute("src");
       replayVideo.load();

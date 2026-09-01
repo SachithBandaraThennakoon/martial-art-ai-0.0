@@ -2389,6 +2389,9 @@ export default function PracticeMode({
         },
         body: serialized
       });
+      if (!response.ok) {
+        console.error("Practice tape storage failed", response.status, await response.text());
+      }
       return response.ok;
     } catch {
       return false;
@@ -2403,6 +2406,8 @@ export default function PracticeMode({
     const token = getAccessToken();
     if (!sessionId || !token || !videoBlob?.size) return null;
 
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 45_000);
     try {
       const idempotencyKey = crypto.randomUUID().replaceAll("-", "");
       const response = await authFetch(
@@ -2416,12 +2421,18 @@ export default function PracticeMode({
             "X-Video-Duration-Ms": String(Math.max(0, Math.round(durationMs))),
             ...(codec ? { "X-Video-Codec": codec } : {})
           },
+          signal: controller.signal,
           body: videoBlob
         }
       );
-      return response.ok ? response.json() : null;
-    } catch {
+      if (response.ok) return response.json();
+      console.error("Practice raw-video storage failed", response.status, await response.text());
       return null;
+    } catch (error) {
+      console.error("Practice raw-video storage failed", error);
+      return null;
+    } finally {
+      window.clearTimeout(timeoutId);
     }
   }, []);
 

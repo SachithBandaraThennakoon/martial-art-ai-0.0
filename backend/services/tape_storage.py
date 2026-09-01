@@ -45,6 +45,7 @@ METADATA_KEYS = {
     "captureMarginsMs", "steps", "authoritativeSession", "ruleEngineAnalysis",
     "captureDurationMs", "canonicalCompletedReps", "canonicalTargetReps",
     "algorithmVersion", "configVersion", "deviceGeneratedEstimate",
+    "analysisAuthority", "videoReplay",
 }
 
 

@@ -4362,7 +4362,7 @@ select:focus {
 
 .analysis-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(110px, auto) minmax(90px, auto) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(110px, auto) minmax(90px, auto) minmax(126px, auto);
   align-items: center;
   gap: 14px;
   padding: 12px;
@@ -6099,7 +6099,12 @@ select:focus {
   background: rgba(255, 255, 255, .035);
 }
 
-.analysis-row > button {
+.analysis-row__actions {
+  display: grid;
+  gap: 6px;
+}
+
+.analysis-row__actions > button {
   min-height: 34px;
   padding: 0 10px;
   border: 1px solid rgba(106, 168, 255, 0.36);
@@ -6111,9 +6116,15 @@ select:focus {
   background: rgba(106, 168, 255, 0.08);
 }
 
-.analysis-row > button:disabled {
+.analysis-row__actions > button:disabled {
   opacity: 0.52;
   cursor: default;
+}
+
+.analysis-row__actions > .analysis-row__video-download {
+  border-color: rgba(96, 211, 148, .38);
+  color: #baf4d4;
+  background: rgba(96, 211, 148, .08);
 }
 
 .practice-range-control {

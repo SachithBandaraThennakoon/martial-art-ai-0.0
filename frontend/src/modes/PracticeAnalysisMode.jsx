@@ -30,6 +30,22 @@ const formatDashboardDate = () =>
     day: "numeric"
   }).format(new Date());
 
+const safeFilePart = (value, fallback) => {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || fallback;
+};
+
+const videoExtension = (mimeType) => {
+  const normalized = String(mimeType || "").toLowerCase();
+  if (normalized.includes("mp4")) return "mp4";
+  if (normalized.includes("quicktime")) return "mov";
+  return "webm";
+};
+
 export default function PracticeAnalysisMode({
   hasTechniqueSelection = false,
   onModeChange,
@@ -40,6 +56,7 @@ export default function PracticeAnalysisMode({
   const [status, setStatus] = useState("Loading analysis.");
   const [loadState, setLoadState] = useState("loading");
   const [exportState, setExportState] = useState("idle");
+  const [videoDownloadStates, setVideoDownloadStates] = useState({});
   const [selectedTapeSessionId, setSelectedTapeSessionId] = useState(null);
 
   const loadAnalysis = useCallback(async (signal) => {
@@ -117,6 +134,44 @@ export default function PracticeAnalysisMode({
       setExportState("error");
     }
   }, [exportState, selectedTechniqueName]);
+
+  const downloadRawVideo = useCallback(async (session) => {
+    const token = getAccessToken();
+    if (!token || !session?.id || !session.raw_video) return;
+    setVideoDownloadStates((current) => ({
+      ...current,
+      [session.id]: "loading"
+    }));
+    try {
+      const response = await authFetch(
+        `${API_BASE_URL}/practice/sessions/${session.id}/video`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (!response.ok) throw new Error(`video-${response.status}`);
+      const payload = await response.blob();
+      const objectUrl = URL.createObjectURL(payload);
+      const anchor = document.createElement("a");
+      const technique = safeFilePart(session.technique_name, "practice");
+      const extension = videoExtension(
+        session.raw_video.mime_type || payload.type
+      );
+      anchor.href = objectUrl;
+      anchor.download = `${technique}-session-${session.id}.${extension}`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(objectUrl);
+      setVideoDownloadStates((current) => ({
+        ...current,
+        [session.id]: "ready"
+      }));
+    } catch {
+      setVideoDownloadStates((current) => ({
+        ...current,
+        [session.id]: "error"
+      }));
+    }
+  }, []);
 
   const summary = analysis?.summary;
   const trainingSummary = analysis?.training_summary;
@@ -364,13 +419,39 @@ export default function PracticeAnalysisMode({
                       : `${session.clean_reps} clean`}
                   </span>
                 </div>
-                <button
-                  disabled={selectedTapeSession?.id === session.id}
-                  onClick={() => setSelectedTapeSessionId(session.id)}
-                  type="button"
-                >
-                  {index === 0 ? "Recent tape" : "Expand tape"}
-                </button>
+                <div className="analysis-row__actions">
+                  <button
+                    disabled={selectedTapeSession?.id === session.id}
+                    onClick={() => setSelectedTapeSessionId(session.id)}
+                    type="button"
+                  >
+                    {index === 0 ? "Recent tape" : "Expand tape"}
+                  </button>
+                  <button
+                    className="analysis-row__video-download"
+                    disabled={
+                      !session.raw_video ||
+                      videoDownloadStates[session.id] === "loading"
+                    }
+                    onClick={() => downloadRawVideo(session)}
+                    title={
+                      session.raw_video
+                        ? `Download ${session.raw_video.mime_type || "raw practice video"}`
+                        : "No raw video was saved for this session"
+                    }
+                    type="button"
+                  >
+                    {videoDownloadStates[session.id] === "loading"
+                      ? "Downloading…"
+                      : videoDownloadStates[session.id] === "ready"
+                        ? "Downloaded"
+                        : videoDownloadStates[session.id] === "error"
+                          ? "Retry video"
+                          : session.raw_video
+                            ? "Download video"
+                            : "No raw video"}
+                  </button>
+                </div>
               </article>
             ))
           )}
