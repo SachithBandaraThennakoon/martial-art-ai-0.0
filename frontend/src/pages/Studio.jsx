@@ -21,6 +21,8 @@ export default function Studio({ isAdminStudio = false }) {
   const [query, setQuery] = useState("");
   const [refreshingCatalog, setRefreshingCatalog] = useState(false);
   const [catalogRefreshMessage, setCatalogRefreshMessage] = useState("");
+  const [syncingDatabase, setSyncingDatabase] = useState(false);
+  const [databaseSyncMessage, setDatabaseSyncMessage] = useState("");
   const normalizedQuery = query.trim().toLowerCase();
 
   const handleSystemCatalogRefresh = useCallback(async () => {
@@ -40,6 +42,32 @@ export default function Studio({ isAdminStudio = false }) {
       setCatalogRefreshMessage("Could not refresh the system catalog. Please try again.");
     } finally {
       setRefreshingCatalog(false);
+    }
+  }, [refreshCatalog]);
+
+  const handleDatabaseSync = useCallback(async (direction) => {
+    const directionLabel = direction === "cloud_to_local" ? "cloud to local" : "local to cloud";
+    const confirmation = window.prompt(
+      `This replaces the destination database's application data (${directionLabel}). Type SYNC to continue.`
+    );
+    if (confirmation !== "SYNC") return;
+
+    setSyncingDatabase(true);
+    setDatabaseSyncMessage("");
+    try {
+      const response = await authFetch(`${API_BASE_URL}/admin/database-sync/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ direction, confirmation })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.detail || "Database sync failed.");
+      await refreshCatalog();
+      setDatabaseSyncMessage(result.message);
+    } catch (error) {
+      setDatabaseSyncMessage(error.message || "Database sync failed.");
+    } finally {
+      setSyncingDatabase(false);
     }
   }, [refreshCatalog]);
 
@@ -124,11 +152,30 @@ export default function Studio({ isAdminStudio = false }) {
                   >
                     {refreshingCatalog ? "Refreshing…" : "Refresh system data"}
                   </button>
+                  <button
+                    className="btn btn--ghost"
+                    disabled={syncingDatabase}
+                    onClick={() => handleDatabaseSync("cloud_to_local")}
+                    type="button"
+                  >
+                    {syncingDatabase ? "Syncing…" : "Pull cloud data"}
+                  </button>
+                  <button
+                    className="btn btn--ghost"
+                    disabled={syncingDatabase}
+                    onClick={() => handleDatabaseSync("local_to_cloud")}
+                    type="button"
+                  >
+                    {syncingDatabase ? "Syncing…" : "Push local data"}
+                  </button>
                 </>
               )}
             </div>
             {isAdminStudio && catalogRefreshMessage ? (
               <p className="studio-catalog-refresh-status" role="status">{catalogRefreshMessage}</p>
+            ) : null}
+            {isAdminStudio && databaseSyncMessage ? (
+              <p className="studio-catalog-refresh-status" role="status">{databaseSyncMessage}</p>
             ) : null}
           </div>
 

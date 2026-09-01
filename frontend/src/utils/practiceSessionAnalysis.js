@@ -75,9 +75,114 @@ const DEFAULT_CLUSTER_CONFIG = Object.freeze({
   minimum_return_score: 75,
   return_dominance_margin: 5,
   minimum_return_frames: 3,
+  maximum_evidence_gap_ms: 500,
   preparation_context_ms: 900,
   maximum_recovery_ms: 1200
 });
+
+function sourceSampleKey(frame, index) {
+  const sourceTimestamp = Number(frame?.sourceTimestampMs);
+  return Number.isFinite(sourceTimestamp) ? `source:${sourceTimestamp}` : `frame:${index}`;
+}
+
+function sourceSampleTimestamp(frame) {
+  const sourceTimestamp = Number(frame?.sourceTimestampMs);
+  return Number.isFinite(sourceTimestamp)
+    ? sourceTimestamp
+    : Number(frame?.elapsedMs) || 0;
+}
+
+function buildCompletionEvents(frames) {
+  const events = [];
+  let highestCompletedRep = 0;
+
+  frames.forEach((frame, index) => {
+    const completedRep = Number(frame?.completedRep);
+    if (!Number.isInteger(completedRep) || completedRep <= highestCompletedRep) return;
+    for (let rep = highestCompletedRep + 1; rep <= completedRep; rep += 1) {
+      events.push({
+        rep,
+        index,
+        post_session_authoritative: frame?.postSessionClassified === true,
+        authoritative:
+          frame?.postSessionClassified === true ||
+          Number(frame?.rep) > rep ||
+          frame?.temporalPhase === "session_complete"
+      });
+    }
+    highestCompletedRep = completedRep;
+  });
+
+  return events;
+}
+
+function buildCompletionDrivenWindows(
+  frames,
+  preparationContextMs = 900,
+  maximumRepetitions = null
+) {
+  const authoritativeEvents = buildCompletionEvents(frames)
+    .filter((event) => event.post_session_authoritative)
+    .filter((event, index, events) =>
+      index === 0 || event.index > events[index - 1].index
+    );
+  const limit = Number(maximumRepetitions);
+  const events = Number.isInteger(limit) && limit > 0
+    ? authoritativeEvents.slice(0, limit)
+    : authoritativeEvents;
+
+  let previousEndIndex = -1;
+  return events.map((event, eventIndex) => {
+    const intervalStart = previousEndIndex + 1;
+    const intervalEnd = event.index;
+    const progressionIndex = frames.findIndex(
+      (frame, index) =>
+        index >= intervalStart &&
+        index <= intervalEnd &&
+        Number(frame?.step) > 1 &&
+        PROGRESSION_PHASES.has(frame?.temporalPhase)
+    );
+    const anchorIndex = progressionIndex >= 0 ? progressionIndex : intervalEnd;
+    const anchorMs = Number(frames[anchorIndex]?.elapsedMs) || 0;
+    const earliestContextMs = Math.max(0, anchorMs - preparationContextMs);
+    let startIndex = anchorIndex;
+
+    for (let index = intervalStart; index <= anchorIndex; index += 1) {
+      const frame = frames[index];
+      if (
+        (Number(frame?.elapsedMs) || 0) >= earliestContextMs &&
+        Number(frame?.step) === 1 &&
+        hasClusterEvidence(frame)
+      ) {
+        startIndex = index;
+        break;
+      }
+    }
+
+    if (startIndex === anchorIndex) {
+      const firstEvidenceIndex = frames.findIndex(
+        (frame, index) =>
+          index >= intervalStart &&
+          index <= anchorIndex &&
+          hasClusterEvidence(frame)
+      );
+      if (firstEvidenceIndex >= 0) startIndex = firstEvidenceIndex;
+    }
+
+    const window = {
+      rep: eventIndex + 1,
+      source_rep: event.rep,
+      start_index: Math.max(intervalStart, startIndex),
+      end_index: Math.max(startIndex, intervalEnd),
+      progression_index: anchorIndex,
+      has_completion_signal: true,
+      classifier_completion_signal: true,
+      boundary_source: "post_session_completion"
+    };
+    previousEndIndex = window.end_index;
+    return window;
+  });
+}
 
 function buildScoreDrivenWindows(frames, config = {}) {
   const settings = { ...DEFAULT_CLUSTER_CONFIG, ...(config || {}) };
@@ -120,15 +225,29 @@ function buildScoreDrivenWindows(frames, config = {}) {
   const impactRuns = [];
   impactIndexes.forEach((index) => {
     const current = impactRuns[impactRuns.length - 1];
+    const sampleKey = sourceSampleKey(frames[index], index);
+    const sampleTimestamp = sourceSampleTimestamp(frames[index]);
     if (
       current &&
-      index - current.end <= Number(settings.maximum_impact_gap_frames) + 1
+      index - current.end <= Number(settings.maximum_impact_gap_frames) + 1 &&
+      sampleTimestamp - current.last_sample_timestamp <=
+        Number(settings.maximum_evidence_gap_ms)
     ) {
       current.end = index;
-      current.confirmed_frames += 1;
+      if (sampleKey !== current.last_sample_key) {
+        current.confirmed_frames += 1;
+        current.last_sample_key = sampleKey;
+        current.last_sample_timestamp = sampleTimestamp;
+      }
       return;
     }
-    impactRuns.push({ start: index, end: index, confirmed_frames: 1 });
+    impactRuns.push({
+      start: index,
+      end: index,
+      confirmed_frames: 1,
+      last_sample_key: sampleKey,
+      last_sample_timestamp: sampleTimestamp
+    });
   });
   let confirmedRuns = impactRuns.filter(
     (run) => {
@@ -167,6 +286,7 @@ function buildScoreDrivenWindows(frames, config = {}) {
     ).slice(0, maximumRepetitions);
   }
 
+  const completionEvents = buildCompletionEvents(frames);
   let previousEndIndex = -1;
   return confirmedRuns.map((run, runIndex) => {
     const impactStartMs = Number(frames[run.start]?.elapsedMs) || 0;
@@ -183,12 +303,17 @@ function buildScoreDrivenWindows(frames, config = {}) {
     }
     let openingRunStart = null;
     let openingRunLength = 0;
+    let openingSampleKey = null;
     let confirmedOpeningStart = null;
     let confirmedOpeningEnd = null;
     for (let index = startIndex; index < run.start; index += 1) {
       if (isEndpoint(frames[index])) {
         if (openingRunStart === null) openingRunStart = index;
-        openingRunLength += 1;
+        const sampleKey = sourceSampleKey(frames[index], index);
+        if (sampleKey !== openingSampleKey) {
+          openingRunLength += 1;
+          openingSampleKey = sampleKey;
+        }
         if (
           openingRunLength >= Number(settings.minimum_return_frames)
         ) {
@@ -198,6 +323,7 @@ function buildScoreDrivenWindows(frames, config = {}) {
       } else {
         openingRunStart = null;
         openingRunLength = 0;
+        openingSampleKey = null;
       }
     }
 
@@ -208,6 +334,7 @@ function buildScoreDrivenWindows(frames, config = {}) {
       Number(settings.maximum_recovery_ms);
     let returnRunStart = null;
     let returnRunLength = 0;
+    let returnSampleKey = null;
     let endIndex = run.end;
     for (
       let index = run.end + 1;
@@ -218,7 +345,11 @@ function buildScoreDrivenWindows(frames, config = {}) {
     ) {
       if (isEndpoint(frames[index])) {
         if (returnRunStart === null) returnRunStart = index;
-        returnRunLength += 1;
+        const sampleKey = sourceSampleKey(frames[index], index);
+        if (sampleKey !== returnSampleKey) {
+          returnRunLength += 1;
+          returnSampleKey = sampleKey;
+        }
         if (returnRunLength >= Number(settings.minimum_return_frames)) {
           endIndex = index;
           break;
@@ -226,6 +357,7 @@ function buildScoreDrivenWindows(frames, config = {}) {
       } else {
         returnRunStart = null;
         returnRunLength = 0;
+        returnSampleKey = null;
       }
       endIndex = index;
     }
@@ -239,9 +371,19 @@ function buildScoreDrivenWindows(frames, config = {}) {
       );
     }
 
+    const sourceRep = Number(frames[run.start]?.rep) || null;
+    const classifierCompletion = completionEvents.find(
+      (event) =>
+        event.rep === sourceRep &&
+        event.index >= run.start &&
+        event.index < nextImpactStart
+    );
+    if (classifierCompletion) {
+      endIndex = Math.max(endIndex, classifierCompletion.index);
+    }
     const window = {
       rep: runIndex + 1,
-      source_rep: Number(frames[run.start]?.rep) || null,
+      source_rep: sourceRep,
       start_index: Math.max(previousEndIndex + 1, startIndex),
       end_index: Math.max(run.end, endIndex),
       progression_index: run.start,
@@ -250,26 +392,19 @@ function buildScoreDrivenWindows(frames, config = {}) {
       opening_start_index: confirmedOpeningStart,
       opening_end_index: confirmedOpeningEnd,
       return_start_index: hasReturnSignal ? returnRunStart : null,
-      has_completion_signal: hasReturnSignal,
-      boundary_source: "score_cycle"
+      has_completion_signal: hasReturnSignal || Boolean(classifierCompletion),
+      classifier_completion_signal: Boolean(classifierCompletion?.authoritative),
+      boundary_source: classifierCompletion
+        ? "score_cycle_and_classifier"
+        : "score_cycle"
     };
     previousEndIndex = window.end_index;
     return window;
   });
 }
 
-function buildMovementDrivenWindows(
-  frames,
-  preparationContextMs = 900,
-  clusterConfig = {}
-) {
-  const scoreDrivenWindows = buildScoreDrivenWindows(frames, {
-    ...clusterConfig,
-    preparation_context_ms:
-      clusterConfig?.preparation_context_ms ?? preparationContextMs
-  });
-  if (scoreDrivenWindows.length) return scoreDrivenWindows;
-
+function buildClassifierDrivenWindows(frames, preparationContextMs = 900) {
+  const completionEvents = buildCompletionEvents(frames);
   const sourceRepIds = [
     ...new Set(
       frames
@@ -284,8 +419,7 @@ function buildMovementDrivenWindows(
       .map((frame, index) => ({ frame, index }))
       .filter(({ frame }) => Number(frame.rep) === sourceRep);
     const progression = repIndexes.find(({ frame }) =>
-      Number(frame.step) > 1 &&
-      PROGRESSION_PHASES.has(frame.temporalPhase)
+      Number(frame.step) > 1 && PROGRESSION_PHASES.has(frame.temporalPhase)
     );
     if (!progression) return;
 
@@ -297,10 +431,15 @@ function buildMovementDrivenWindows(
       Number(frame.step) === 1 &&
       hasClusterEvidence(frame)
     );
-    const completion = [...repIndexes].reverse().find(({ frame }) =>
-      Number(frame.completedRep) === sourceRep ||
+    const completionEvent = completionEvents.find(
+      (event) => event.rep === sourceRep && event.index >= progression.index
+    );
+    const phaseCompletion = [...repIndexes].reverse().find(({ frame }) =>
       ["rep_complete", "session_complete"].includes(frame.temporalPhase)
     );
+    const completion = completionEvent
+      ? { frame: frames[completionEvent.index], index: completionEvent.index }
+      : phaseCompletion;
     const lastEvidence = [...repIndexes].reverse().find(({ frame }) =>
       hasClusterEvidence(frame)
     );
@@ -321,16 +460,74 @@ function buildMovementDrivenWindows(
       end_index: endIndex,
       progression_index: progression.index,
       has_completion_signal: Boolean(completion),
-      boundary_source: "classifier"
+      classifier_completion_signal: Boolean(completionEvent?.authoritative),
+      boundary_source: completionEvent ? "classifier_completion" : "classifier"
     });
   });
 
   return windows;
 }
 
+function buildMovementDrivenWindows(
+  frames,
+  preparationContextMs = 900,
+  clusterConfig = {}
+) {
+  const completionWindows = buildCompletionDrivenWindows(
+    frames,
+    preparationContextMs,
+    clusterConfig?.maximum_repetitions
+  );
+  const classifierWindows = buildClassifierDrivenWindows(
+    frames,
+    preparationContextMs
+  );
+  const scoreDrivenWindows = buildScoreDrivenWindows(frames, {
+    ...clusterConfig,
+    preparation_context_ms:
+      clusterConfig?.preparation_context_ms ?? preparationContextMs
+  });
+  if (!scoreDrivenWindows.length && !completionWindows.length) {
+    return classifierWindows;
+  }
+
+  const merged = completionWindows.length
+    ? [...completionWindows]
+    : [...scoreDrivenWindows];
+  const fallbackWindows = completionWindows.length
+    ? [...scoreDrivenWindows, ...classifierWindows]
+    : classifierWindows;
+  fallbackWindows.forEach((classifierWindow) => {
+    const alreadyRepresented = merged.some((existingWindow) =>
+      existingWindow.source_rep === classifierWindow.source_rep ||
+      (
+        classifierWindow.progression_index >= existingWindow.start_index &&
+        classifierWindow.progression_index <= existingWindow.end_index
+      )
+    );
+    const occursAfterCompletedSet = completionWindows.length &&
+      classifierWindow.progression_index > completionWindows.at(-1).end_index;
+    if (
+      !alreadyRepresented &&
+      (classifierWindow.classifier_completion_signal || occursAfterCompletedSet)
+    ) {
+      merged.push(classifierWindow);
+    }
+  });
+
+  return merged
+    .sort((first, second) => first.start_index - second.start_index)
+    .map((window, index) => ({ ...window, rep: index + 1 }));
+}
+
 function frameKind(frame) {
   if (frame.temporalPhase === "tracking_lost") return "tracking";
-  if (frame.temporalPhase === "session_complete") return "complete";
+  if (
+    frame.temporalPhase === "session_complete" &&
+    frame.analysisKind !== "repetition"
+  ) {
+    return "complete";
+  }
   return frame.analysisKind || "preparation";
 }
 
@@ -546,7 +743,8 @@ export function buildPracticeSessionAnalysis(
     const hasFullStepCoverage =
       !steps.length || detectedSteps.size >= steps.length;
     const status =
-      hasCompletionSignal && hasFullStepCoverage
+      window.classifier_completion_signal ||
+      (hasCompletionSignal && hasFullStepCoverage)
         ? "completed"
         : hasCompletionSignal
           ? "partial"

@@ -27,6 +27,10 @@ class PracticeAnalyticsTests(unittest.TestCase):
         })
 
         self.assertEqual(payload["completed_repetitions"], 3)
+        self.assertEqual(payload["completion_source"], "post_session_cluster")
+        self.assertEqual(
+            payload["completion_evidence"]["strict_rule_engine"], 3
+        )
         self.assertEqual(payload["aborted_repetitions"], 0)
         self.assertEqual(payload["average_response_time_ms"], 420)
         self.assertEqual(payload["tracking_quality_percentage"], 94.5)
@@ -43,6 +47,37 @@ class PracticeAnalyticsTests(unittest.TestCase):
         self.assertIsNone(payload["tracking_quality_percentage"])
         self.assertIsNone(payload["average_response_time_ms"])
         self.assertEqual(payload["common_form_errors"], [])
+
+    def test_post_session_result_is_not_overwritten_by_stale_session_count(self):
+        payload = extract_practice_analytics({
+            "canonicalCompletedReps": 4,
+            "canonicalTargetReps": 5,
+            "correctedSummary": {"completed_reps": 5},
+            "ruleEngineAnalysis": {
+                "summary": {"completed_repetitions": 5}
+            },
+        })
+
+        self.assertEqual(payload["completed_repetitions"], 5)
+        self.assertEqual(payload["aborted_repetitions"], 0)
+        self.assertEqual(payload["completion_source"], "post_session_cluster")
+        self.assertEqual(
+            payload["completion_evidence"]["canonical_session"], 4
+        )
+
+    def test_persisted_rep_count_is_not_overwritten_by_stale_tape_metadata(self):
+        payload = extract_practice_analytics({
+            "canonicalCompletedReps": 5,
+            "canonicalTargetReps": 5,
+            "correctedSummary": {"completed_reps": 4},
+            "ruleEngineAnalysis": {
+                "summary": {"completed_repetitions": 0}
+            },
+        })
+
+        self.assertEqual(payload["completed_repetitions"], 5)
+        self.assertEqual(payload["aborted_repetitions"], 0)
+        self.assertEqual(payload["completion_source"], "canonical_session")
 
 
 if __name__ == "__main__":

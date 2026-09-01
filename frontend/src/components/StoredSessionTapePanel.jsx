@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { API_BASE_URL } from "../services/api";
 import { authFetch, getAccessToken } from "../services/authSession";
+import { techniqueCatalog } from "../data/techniqueCatalog";
 import { buildPracticeSessionAnalysis } from "../utils/practiceSessionAnalysis";
+import { buildPracticeScoreExplanation } from "../utils/practiceScoreExplanation";
+import {
+  SessionAccuracyChart,
+  SessionAnalysisMap,
+  SessionMomentFacts,
+  SessionScoreReason
+} from "./SessionAnalysisVisuals";
 
 const CONNECTIONS = [
   [0, 11], [0, 12], [11, 12], [11, 13], [13, 15], [12, 14], [14, 16],
@@ -29,6 +37,12 @@ const decodeFrame = (frame, index) => ({
   focusBodyPart: frame.f || null,
   issue: frame.i || null,
   wrongBodyParts: frame.w || [],
+  angles: Object.fromEntries(
+    Object.entries(frame.av || {}).map(([name, value]) => [
+      name,
+      Number.isFinite(value) ? value / 100 : null
+    ])
+  ),
   landmarks: decodePose(frame.p),
   trackingConfidence: Number.isFinite(frame.tc) ? frame.tc / 1000 : null,
   phase: frame.ph || "keyframe",
@@ -71,56 +85,6 @@ function StoredTapeSkeleton({ landmarks = [], mirrored = true }) {
   );
 }
 
-function StoredSessionMap({ analysis, onSelectFrame, selectedFrame }) {
-  if (!analysis?.segments?.length) return null;
-  const duration = Math.max(analysis.duration_ms, 1);
-  return (
-    <section className="stored-tape-panel__map">
-      <div>
-        <p className="eyebrow">Session map</p>
-        <strong>Movement timeline</strong>
-        <span>{analysis.clustered_completed_repetitions}/{analysis.target_repetitions} completed</span>
-      </div>
-      <div className="stored-tape-panel__segments">
-        {analysis.segments.map((segment, index) => (
-          <button
-            className={`is-${segment.kind} ${
-              segment.has_review ? "has-review" : ""
-            } ${
-              selectedFrame >= segment.start_frame_index &&
-              selectedFrame <= segment.end_frame_index
-                ? "is-selected"
-                : ""
-            }`}
-            key={`${segment.key}-${index}`}
-            onClick={() => onSelectFrame(segment.start_frame_index)}
-            style={{ flexGrow: Math.max(1, segment.duration_ms / duration * 100) }}
-            title={`${segment.phase_label} · ${Math.round(segment.duration_ms)}ms`}
-            type="button"
-          >
-            <strong>{segment.kind === "preparation" ? "PREP" : segment.rep ? `R${segment.rep} S${segment.step}` : "MOVE"}</strong>
-            <small>{segment.phase_label}</small>
-          </button>
-        ))}
-      </div>
-      <div className="stored-tape-panel__reps">
-        {analysis.repetitions.map((repetition) => (
-          <button
-            className={`is-${repetition.status}`}
-            key={repetition.rep}
-            onClick={() => onSelectFrame(repetition.start_frame_index)}
-            type="button"
-          >
-            <span>Rep {repetition.rep}</span>
-            <strong>{formatLabel(repetition.status)}</strong>
-            <small>{repetition.step_coverage_percentage}% steps</small>
-          </button>
-        ))}
-      </div>
-    </section>
-  );
-}
-
 const practiceSessionId = (session) => {
   if (session?.mode && session.mode !== "practice") return null;
   const value = String(session?.id ?? "");
@@ -137,44 +101,6 @@ const formatLabel = (value) =>
   value
     ? String(value).replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase())
     : "Preparation";
-
-function AccuracyStrip({ frames, selectedFrame, onSelectFrame }) {
-  const scored = frames.filter(
-    (frame) => frame.scorable !== false && Number.isFinite(frame.accuracy)
-  );
-  if (!scored.length) {
-    return <div className="stored-tape-panel__accuracy-empty">No scored frames in this tape.</div>;
-  }
-  const duration = Math.max(frames.at(-1)?.elapsedMs || 0, 1);
-  const points = scored.map((frame) => ({
-    x: (frame.elapsedMs / duration) * 1000,
-    y: 110 - (Math.max(0, Math.min(100, frame.accuracy)) / 100) * 90,
-    frame
-  }));
-  const path = points
-    .map((point, index) => `${index ? "L" : "M"}${point.x.toFixed(1)},${point.y.toFixed(1)}`)
-    .join(" ");
-
-  return (
-    <div className="stored-tape-panel__accuracy">
-      <div><span>Session accuracy</span><small>Click a point to inspect the frame</small></div>
-      <svg aria-label="Stored session accuracy timeline" role="img" viewBox="0 0 1000 125">
-        <line x1="0" x2="1000" y1="38" y2="38" />
-        <path d={path} />
-        {points.filter((_, index) => index % Math.max(1, Math.floor(points.length / 40)) === 0).map((point) => (
-          <circle
-            className={point.frame.frame - 1 === selectedFrame ? "is-selected" : ""}
-            cx={point.x}
-            cy={point.y}
-            key={point.frame.frame}
-            onClick={() => onSelectFrame(point.frame.frame - 1)}
-            r={point.frame.frame - 1 === selectedFrame ? 6 : 3}
-          />
-        ))}
-      </svg>
-    </div>
-  );
-}
 
 export default function StoredSessionTapePanel({
   defaultExpanded = false,
@@ -223,7 +149,23 @@ export default function StoredSessionTapePanel({
   }, [expanded, loadState, loadTape, sessionId]);
 
   const frames = useMemo(() => tape?.frames || [], [tape]);
-  const steps = useMemo(() => tape?.metadata?.steps || [], [tape]);
+  const steps = useMemo(() => {
+    const storedSteps = tape?.metadata?.steps || [];
+    const techniqueName = tape?.metadata?.techniqueName || session?.technique_name;
+    const catalogTechnique = techniqueCatalog
+      .flatMap((category) => category.subcategories)
+      .flatMap((subcategory) => subcategory.techniques)
+      .find((technique) => technique.name === techniqueName);
+    const catalogSteps = catalogTechnique?.steps || [];
+    if (!storedSteps.length) return catalogSteps;
+    return storedSteps.map((storedStep, index) => ({
+      ...(catalogSteps[index] || {}),
+      ...storedStep,
+      angles: storedStep.angles?.length
+        ? storedStep.angles
+        : catalogSteps[index]?.angles || []
+    }));
+  }, [session?.technique_name, tape]);
   const analysis = useMemo(
     () =>
       frames.length
@@ -236,6 +178,12 @@ export default function StoredSessionTapePanel({
   );
   const currentFrame = frames[selectedFrame] || null;
   const assignment = analysis?.frame_assignments?.[selectedFrame] || null;
+  const selectedStep = assignment?.step
+    ? steps[Math.max(0, assignment.step - 1)] || null
+    : null;
+  const scoreExplanation = buildPracticeScoreExplanation(currentFrame, {
+    step: selectedStep
+  });
   const scoredFrames = frames.filter(
     (frame) => frame.scorable !== false && Number.isFinite(frame.accuracy)
   );
@@ -280,12 +228,12 @@ export default function StoredSessionTapePanel({
           ) : null}
           {loadState === "ready" && analysis && currentFrame ? (
             <>
-              <StoredSessionMap
+              <SessionAnalysisMap
                 analysis={analysis}
                 onSelectFrame={setSelectedFrame}
                 selectedFrame={selectedFrame}
               />
-              <AccuracyStrip
+              <SessionAccuracyChart
                 frames={frames}
                 onSelectFrame={setSelectedFrame}
                 selectedFrame={selectedFrame}
@@ -303,21 +251,21 @@ export default function StoredSessionTapePanel({
                   <p className="eyebrow">Movement details</p>
                   <h3>Selected moment</h3>
                   <div>
-                    <span><small>Timestamp</small><strong>{formatTime(currentFrame.elapsedMs)}</strong></span>
-                    <span><small>Rep</small><strong>{assignment?.rep || "Preparation"}</strong></span>
-                    <span>
-                      <small>Step</small>
-                      <strong>
-                        {assignment?.step
-                          ? steps[Math.max(0, assignment.step - 1)]?.step_name ||
-                            `Step ${assignment.step}`
-                          : "Preparation"}
-                      </strong>
-                    </span>
-                    <span><small>Phase</small><strong>{formatLabel(assignment?.phase)}</strong></span>
-                    <span><small>Accuracy estimate</small><strong>{Number.isFinite(currentFrame.accuracy) ? `${currentFrame.accuracy}%` : "Not scored"}</strong></span>
-                    <span><small>Tracking</small><strong>{currentFrame.trackingReliable === false ? "Lost" : "Tracked"}</strong></span>
+                    <SessionMomentFacts
+                      accuracy={Number.isFinite(currentFrame.accuracy) ? `${currentFrame.accuracy}%` : "Not scored"}
+                      phase={formatLabel(assignment?.phase)}
+                      rep={assignment?.rep || "Preparation"}
+                      step={assignment?.step
+                        ? selectedStep?.step_name || `Step ${assignment.step}`
+                        : "Preparation"}
+                      timestamp={formatTime(currentFrame.elapsedMs)}
+                      tracking={currentFrame.trackingReliable === false ? "Lost" : "Tracked"}
+                    />
                   </div>
+                  <SessionScoreReason
+                    className="stored-tape-panel__score-reason"
+                    explanation={scoreExplanation}
+                  />
                   <div className="stored-tape-panel__summary">
                     <span><small>Average</small><strong>{averageAccuracy == null ? "--" : `${averageAccuracy}%`}</strong></span>
                     <span><small>Review frames</small><strong>{scoredFrames.filter((frame) => frame.accuracy < 80).length}</strong></span>

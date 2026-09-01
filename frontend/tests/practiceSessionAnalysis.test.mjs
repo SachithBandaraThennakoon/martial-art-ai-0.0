@@ -18,6 +18,8 @@ const frame = ({
   accuracy = null,
   scorable = false,
   countTimestampMs = null,
+  sourceTimestampMs = null,
+  postSessionClassified = false,
   rule = null
 }) => ({
   elapsedMs,
@@ -30,6 +32,8 @@ const frame = ({
   accuracy,
   scorable,
   countTimestampMs,
+  sourceTimestampMs: sourceTimestampMs ?? elapsedMs,
+  postSessionClassified,
   trackingReliable: true,
   ruleEngineAnalysis: rule ? { corrected: rule } : null
 });
@@ -59,6 +63,7 @@ test("session analysis separates preparation from ordered repetitions", () => {
   assert.equal(analysis.repetitions.length, 1);
   assert.equal(analysis.repetitions[0].status, "completed");
   assert.deepEqual(analysis.repetitions[0].detected_steps, [1, 2, 3]);
+  assert.equal(analysis.frame_assignments.at(-1).kind, "repetition");
   assert.equal(analysis.clustered_completed_repetitions, 1);
   assert.equal(analysis.strict_verified_repetitions, 0);
 });
@@ -91,6 +96,91 @@ test("completion evidence with a missing opening step is marked as a partial tap
   assert.equal(analysis.repetitions[0].status, "partial");
   assert.equal(analysis.repetitions[0].step_coverage_percentage, 67);
   assert.equal(analysis.clustered_completed_repetitions, 0);
+});
+
+test("classifier completion follows the completed rep after the classifier advances", () => {
+  const analysis = buildPracticeSessionAnalysis([
+    frame({ elapsedMs: 0, rep: 1, step: 1, temporalPhase: "step_hold", matchedStep: 1 }),
+    frame({ elapsedMs: 100, rep: 1, step: 2, temporalPhase: "step_peak", matchedStep: 2 }),
+    frame({ elapsedMs: 200, rep: 1, step: 3, temporalPhase: "rep_recovery", matchedStep: 3 }),
+    frame({ elapsedMs: 300, rep: 2, step: 1, temporalPhase: "step_hold", completedRep: 1 }),
+    frame({ elapsedMs: 400, rep: 2, step: 2, temporalPhase: "step_peak", matchedStep: 2 }),
+    frame({ elapsedMs: 500, rep: 2, step: 3, temporalPhase: "rep_recovery", matchedStep: 3 }),
+    frame({ elapsedMs: 600, rep: 3, step: 1, temporalPhase: "seeking_step", completedRep: 2 })
+  ], {
+    steps: [{}, {}, {}],
+    targetReps: 2
+  });
+
+  assert.equal(analysis.repetitions.length, 2);
+  assert.equal(analysis.clustered_completed_repetitions, 2);
+});
+
+test("classifier completion recovers a sparse score cycle without inventing frames", () => {
+  const frames = [
+    frame({ elapsedMs: 0, sourceTimestampMs: 10, rep: 1, step: 1, temporalPhase: "step_hold", stepScores: [90, 20, 85] }),
+    frame({ elapsedMs: 33, sourceTimestampMs: 10, rep: 1, step: 1, temporalPhase: "step_hold", stepScores: [90, 20, 85] }),
+    frame({ elapsedMs: 66, sourceTimestampMs: 10, rep: 1, step: 1, temporalPhase: "step_hold", stepScores: [90, 20, 85] }),
+    frame({ elapsedMs: 100, sourceTimestampMs: 100, rep: 1, step: 2, temporalPhase: "step_peak", matchedStep: 2, stepScores: [10, 95, 10] }),
+    frame({ elapsedMs: 133, sourceTimestampMs: 100, rep: 1, step: 2, temporalPhase: "step_peak", matchedStep: 2, stepScores: [10, 95, 10] }),
+    frame({ elapsedMs: 166, sourceTimestampMs: 100, rep: 1, step: 2, temporalPhase: "step_peak", matchedStep: 2, stepScores: [10, 95, 10] }),
+    frame({ elapsedMs: 250, sourceTimestampMs: 250, rep: 1, step: 3, temporalPhase: "rep_recovery", matchedStep: 3, stepScores: [88, 25, 86] }),
+    frame({ elapsedMs: 300, sourceTimestampMs: 300, rep: 2, step: 1, temporalPhase: "step_hold", completedRep: 1, stepScores: [90, 20, 88] })
+  ];
+
+  const analysis = buildPracticeSessionAnalysis(frames, {
+    steps: [{}, {}, {}],
+    targetReps: 1
+  });
+
+  assert.equal(analysis.repetitions.length, 1);
+  assert.equal(analysis.repetitions[0].status, "completed");
+  assert.equal(analysis.clustered_completed_repetitions, 1);
+});
+
+test("post-session completion events reconcile every rep despite sparse score clusters", () => {
+  const completionIndexes = new Map([
+    [9, 1],
+    [19, 2],
+    [29, 3],
+    [39, 4],
+    [49, 5]
+  ]);
+  const frames = Array.from({ length: 56 }, (_, index) => {
+    const rep = Math.min(5, Math.floor(index / 10) + 1);
+    const position = index % 10;
+    const completedRep = completionIndexes.get(index) ?? null;
+    const step = position < 3 ? 1 : position < 7 ? 2 : 3;
+    const hasStrongScoreCluster = rep <= 2 && position >= 3 && position < 7;
+    return frame({
+      elapsedMs: index * 33,
+      rep,
+      step,
+      temporalPhase: completedRep
+        ? completedRep === 5 ? "session_complete" : "rep_complete"
+        : step === 1 ? "step_hold" : step === 2 ? "step_peak" : "rep_recovery",
+      completedRep,
+      postSessionClassified: true,
+      matchedStep: step,
+      stepScores: hasStrongScoreCluster ? [10, 96, 10] : [90, 35, 88],
+      accuracy: 94,
+      scorable: true
+    });
+  });
+
+  const analysis = buildPracticeSessionAnalysis(frames, {
+    steps: [{}, {}, {}],
+    targetReps: 5
+  });
+
+  assert.equal(analysis.repetitions.length, 5);
+  assert.equal(analysis.clustered_completed_repetitions, 5);
+  assert.equal(analysis.clustered_incomplete_repetitions, 0);
+  assert.deepEqual(
+    analysis.repetitions.map((repetition) => repetition.status),
+    ["completed", "completed", "completed", "completed", "completed"]
+  );
+  assert.equal(analysis.frame_assignments.at(-1).kind, "preparation");
 });
 
 test("trailing seeking frames do not create a phantom repetition", () => {

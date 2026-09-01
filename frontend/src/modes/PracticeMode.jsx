@@ -7,6 +7,12 @@ import Level1DebugPanel from "../components/Level1DebugPanel";
 import Level2DebugPanel from "../components/Level2DebugPanel";
 import SkeletonCanvas from "../components/SkeletonCanvas";
 import {
+  SessionAccuracyChart,
+  SessionAnalysisMap,
+  SessionMomentFacts,
+  SessionScoreReason
+} from "../components/SessionAnalysisVisuals";
+import {
   getTechniqueFromCatalog,
   getTechniqueTrackingPackage
 } from "../data/techniqueCatalog";
@@ -41,9 +47,9 @@ import {
 } from "../tracking/practiceTapeRuleEngineBridge";
 import {
   buildPracticeSessionAnalysis,
-  buildPracticeSessionMetrics,
-  selectPracticeTimelineView
+  buildPracticeSessionMetrics
 } from "../utils/practiceSessionAnalysis";
+import { buildPracticeScoreExplanation } from "../utils/practiceScoreExplanation";
 import {
   getPracticeCueDeadlineMs,
   getPracticeCueDelayMs,
@@ -803,319 +809,6 @@ function LandmarkDetailSkeleton({ kind, points = [], mirrored = true }) {
   );
 }
 
-function PracticeAccuracyTimeline({
-  countFilter = "all",
-  contentWidth = 470,
-  expanded = false,
-  frames = [],
-  onScroll,
-  onSelectFrame,
-  scrollRef,
-  selectedFrame,
-  stepFilter = "all"
-}) {
-  const plot = { left: 0, top: 8, width: contentWidth, height: expanded ? 82 : 44 };
-  const chartHeight = expanded ? 112 : 72;
-  const duration = Math.max(frames[frames.length - 1]?.elapsedMs || 0, 1);
-  const stride = Math.max(1, Math.ceil(frames.length / (expanded ? 180 : 100)));
-  const sampled = frames.filter(
-    (frame, index) =>
-      Number.isFinite(frame.accuracy) &&
-      (index % stride === 0 || index === frames.length - 1)
-  );
-  const xAt = (elapsedMs) => plot.left + (elapsedMs / duration) * plot.width;
-  const yAt = (accuracy) =>
-    plot.top + plot.height - (Math.max(0, Math.min(100, accuracy || 0)) / 100) * plot.height;
-  const linePoints = sampled
-    .map((frame) => `${xAt(frame.elapsedMs).toFixed(1)},${yAt(frame.accuracy).toFixed(1)}`)
-    .join(" ");
-  const frameMatchesFilter = (frame) =>
-    Number.isFinite(frame.accuracy) &&
-    (
-      countFilter === "all" ||
-      (frame.analysisRep ?? frame.rep) === Number(countFilter)
-    ) &&
-    (stepFilter === "all" ||
-      (frame.step === Number(stepFilter) && frame.scorable !== false));
-  const activeSegments = frames.reduce((segments, frame) => {
-    if (!frameMatchesFilter(frame)) return segments;
-    const previousSegment = segments[segments.length - 1];
-    const previousFrame = previousSegment?.[previousSegment.length - 1];
-    if (!previousFrame || frame.frame !== previousFrame.frame + 1) {
-      segments.push([frame]);
-    } else {
-      previousSegment.push(frame);
-    }
-    return segments;
-  }, []);
-  const countMarkers = Array.from(
-    frames.reduce((markers, frame) => {
-      if (frame.countCue && !markers.has(frame.countCue)) {
-        markers.set(frame.countCue, frame.countTimestampMs ?? frame.elapsedMs);
-      }
-      return markers;
-    }, new Map()).entries()
-  );
-  const dropPoints = frames
-    .filter(frameMatchesFilter)
-    .filter((frame) => {
-      const previous = frames[frame.frame - 2];
-      const next = frames[frame.frame];
-      return frame.accuracy < CLEAN_ACCURACY &&
-        (!previous || frame.accuracy <= previous.accuracy) &&
-        (!next || frame.accuracy <= next.accuracy);
-    })
-    .filter((_, index, points) => {
-      const previous = points[index - 1];
-      return !previous || _.elapsedMs - previous.elapsedMs >= 250;
-    })
-    .sort((left, right) => left.accuracy - right.accuracy)
-    .slice(0, expanded ? 12 : 6)
-    .sort((left, right) => left.elapsedMs - right.elapsedMs);
-
-  return (
-    <div className={`practice-accuracy-timeline ${expanded ? "is-expanded" : ""}`}>
-      <div className="practice-accuracy-timeline__heading">
-        <div>
-          <span>Session accuracy</span>
-          <strong>One line · X time · Y accuracy</strong>
-        </div>
-        <span><i /> Accuracy drop</span>
-      </div>
-      <div
-        className="practice-accuracy-timeline__scroller"
-        onScroll={onScroll}
-        ref={scrollRef}
-      >
-        <svg
-          aria-label="Session accuracy over time with selectable accuracy drops"
-          className="practice-accuracy-timeline__plot"
-          role="img"
-          style={{ height: `${chartHeight}px`, width: `${contentWidth}px` }}
-          viewBox={`0 0 ${contentWidth} ${chartHeight}`}
-        >
-          <line
-            className="is-target"
-            x1={plot.left}
-            x2={plot.left + plot.width}
-            y1={yAt(CLEAN_ACCURACY)}
-            y2={yAt(CLEAN_ACCURACY)}
-          />
-          {countMarkers.map(([rep, elapsedMs]) => (
-            <g key={`timeline-count-${rep}`}>
-              <line
-                className="is-count-marker"
-                x1={xAt(elapsedMs)}
-                x2={xAt(elapsedMs)}
-                y1={plot.top}
-                y2={plot.top + plot.height}
-              />
-              <text className="is-count-label" x={xAt(elapsedMs) + 3} y={plot.top + 8}>
-                C{rep}
-              </text>
-            </g>
-          ))}
-          <text x="3" y={yAt(CLEAN_ACCURACY) - 3}>80%</text>
-          <text x="3" y={chartHeight - 2}>0:00</text>
-          <text x={contentWidth - 3} y={chartHeight - 2} textAnchor="end">
-            {formatTapeTime(duration)}
-          </text>
-          <polyline className="is-context" points={linePoints} />
-          {activeSegments.map((segment, segmentIndex) => {
-            const segmentStride = Math.max(
-              1,
-              Math.ceil(segment.length / (expanded ? 180 : 100))
-            );
-            const points = segment
-              .filter(
-                (_, index) =>
-                  index % segmentStride === 0 || index === segment.length - 1
-              )
-              .map(
-                (frame) =>
-                  `${xAt(frame.elapsedMs).toFixed(1)},${yAt(frame.accuracy).toFixed(1)}`
-              )
-              .join(" ");
-            return (
-              <polyline
-                className="is-active"
-                key={`active-accuracy-${segmentIndex}`}
-                points={points}
-              />
-            );
-          })}
-          {dropPoints.map((frame) => (
-            <circle
-              aria-label={`Accuracy drop at ${formatTapeTime(frame.elapsedMs)}, rep ${frame.analysisRep ?? frame.rep}, step ${frame.step}, ${frame.accuracy}%`}
-              className={frame.frame - 1 === selectedFrame ? "is-selected" : ""}
-              cx={xAt(frame.elapsedMs)}
-              cy={yAt(frame.accuracy)}
-              key={`accuracy-drop-${frame.frame}`}
-              onClick={() => onSelectFrame?.(frame.frame - 1)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  onSelectFrame?.(frame.frame - 1);
-                }
-              }}
-              r={frame.frame - 1 === selectedFrame ? 4.5 : 3.2}
-              role="button"
-              tabIndex={0}
-            >
-              <title>
-                {`Rep ${frame.analysisRep ?? frame.rep} · Step ${frame.step} · ${frame.accuracy}% · ${formatTapeTime(frame.elapsedMs)}`}
-              </title>
-            </circle>
-          ))}
-        </svg>
-      </div>
-    </div>
-  );
-}
-
-function PracticeSessionMap({
-  analysis,
-  onSelectFrame,
-  selectedFrame
-}) {
-  const [showAdvancedTimeline, setShowAdvancedTimeline] = useState(false);
-  if (!analysis?.segments?.length) return null;
-  const timelineView = selectPracticeTimelineView(analysis, {
-    advanced: showAdvancedTimeline
-  });
-  const durationMs = Math.max(
-    timelineView.end_ms - timelineView.start_ms,
-    1
-  );
-  const timelineRange = (startMs, rangeDurationMs, minimumWidth = 0.35) => {
-    const left = Math.min(
-      100,
-      Math.max(
-        0,
-        ((Math.max(timelineView.start_ms, Number(startMs) || 0) -
-          timelineView.start_ms) /
-          durationMs) *
-          100
-      )
-    );
-    const clippedEnd = Math.min(
-      timelineView.end_ms,
-      (Number(startMs) || 0) + Math.max(Number(rangeDurationMs) || 0, 34)
-    );
-    const width = Math.min(
-      100 - left,
-      Math.max(
-        minimumWidth,
-        ((clippedEnd -
-          Math.max(timelineView.start_ms, Number(startMs) || 0)) /
-          durationMs) *
-          100
-      )
-    );
-    return { left, width };
-  };
-
-  return (
-    <section className="practice-session-map" aria-label="Canonical session map">
-      <div className="practice-session-map__header">
-        <div>
-          <p className="eyebrow">Session map</p>
-          <strong>Movement timeline</strong>
-        </div>
-        <div className="practice-session-map__header-actions">
-          <button
-            aria-pressed={showAdvancedTimeline}
-            onClick={() => setShowAdvancedTimeline((isVisible) => !isVisible)}
-            type="button"
-          >
-            {showAdvancedTimeline ? "Hide advanced" : "Advanced frames"}
-          </button>
-          <span>
-            Clusters {analysis.clustered_completed_repetitions}/
-            {analysis.target_repetitions} · Verified {analysis.strict_verified_repetitions}/
-            {analysis.target_repetitions}
-          </span>
-        </div>
-      </div>
-
-      <div className="practice-session-map__timeline">
-        <div className="practice-session-map__tracks">
-          <div className="practice-session-map__segments">
-            {timelineView.segments.map((segment, index) => {
-              const selected =
-                selectedFrame >= segment.start_frame_index &&
-                selectedFrame <= segment.end_frame_index;
-              const range = timelineRange(
-                segment.start_ms,
-                segment.duration_ms
-              );
-              return (
-                <button
-                  className={`is-${segment.kind} ${segment.has_review ? "has-review" : ""} ${selected ? "is-selected" : ""}`}
-                  key={`${segment.key}:${segment.start_frame_index}:${index}`}
-                  onClick={() => onSelectFrame?.(segment.start_frame_index)}
-                  style={{
-                    "--segment-left": `${range.left}%`,
-                    "--segment-width": `${range.width}%`
-                  }}
-                  title={`${segment.kind === "repetition" ? `Rep ${segment.rep} · ${segment.step_name}` : segment.phase_label} · ${segment.phase_label} · ${Math.round(segment.duration_ms)} ms`}
-                  type="button"
-                >
-                  <span>
-                    {segment.kind === "preparation"
-                      ? "PREP"
-                      : segment.kind === "tracking"
-                        ? "LOST"
-                        : segment.kind === "unconfirmed"
-                          ? "UNCONF"
-                        : segment.kind === "complete"
-                          ? "END"
-                          : `R${segment.rep} S${segment.step}`}
-                  </span>
-                  <small>{segment.phase_label}</small>
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="practice-session-map__reps">
-            {analysis.repetitions.map((repetition) => {
-              const range = timelineRange(
-                repetition.start_ms,
-                repetition.duration_ms,
-                1
-              );
-              return (
-                <button
-                  className={`is-${repetition.status}`}
-                  key={`session-map-rep-${repetition.rep}`}
-                  onClick={() =>
-                    onSelectFrame?.(repetition.start_frame_index)
-                  }
-                  style={{
-                    "--rep-left": `${range.left}%`,
-                    "--rep-width": `${range.width}%`
-                  }}
-                  type="button"
-                >
-                  <span>Rep {repetition.rep}</span>
-                  <strong>{repetition.status}</strong>
-                  <small>
-                    {repetition.step_coverage_percentage}% steps ·{" "}
-                    {Number.isFinite(repetition.average_accuracy)
-                      ? `${Math.round(repetition.average_accuracy)}% form`
-                      : "form unavailable"}
-                  </small>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
 const formatBodyPart = (bodyPart) =>
   bodyPart
     ? bodyPart.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase())
@@ -1408,9 +1101,6 @@ export default function PracticeMode({
   const selectedStepIndexRef = useRef(0);
   const recordedFramesRef = useRef([]);
   const recordingTimerRef = useRef(null);
-  const cameraRollScrollRef = useRef(null);
-  const accuracyTimelineScrollRef = useRef(null);
-  const timelineScrollSyncRef = useRef(false);
   const recoveryEndsAtRef = useRef(null);
   const sessionRef = useRef(null);
   const repCountRef = useRef(0);
@@ -1472,7 +1162,13 @@ export default function PracticeMode({
   }
 
   const tapeAnalysisSteps = analysisTapeMetadata?.steps?.length
-    ? analysisTapeMetadata.steps
+    ? analysisTapeMetadata.steps.map((storedStep, index) => ({
+        ...(steps[index] || {}),
+        ...storedStep,
+        angles: storedStep.angles?.length
+          ? storedStep.angles
+          : steps[index]?.angles || []
+      }))
     : steps;
   const tapeTargetReps =
     analysisTapeMetadata?.authoritativeSession?.target_reps ||
@@ -1534,6 +1230,12 @@ export default function PracticeMode({
     fullTapeFrame?.ruleEngineAnalysis?.corrected ||
     fullTapeFrame?.ruleEngineAnalysis?.raw ||
     null;
+  const selectedAnalysisStep = Number(fullTapeFrame?.step)
+    ? tapeAnalysisSteps[Math.max(0, Number(fullTapeFrame.step) - 1)] || null
+    : null;
+  const selectedScoreExplanation = buildPracticeScoreExplanation(fullTapeFrame, {
+    step: selectedAnalysisStep
+  });
   const fullTapeFrameIsPreparation =
     fullTapeFrame?.analysisKind !== "repetition";
   const displayedFrameRep = fullTapeFrame?.analysisRep;
@@ -1548,10 +1250,6 @@ export default function PracticeMode({
       fullTapeFrame.accuracy < CLEAN_ACCURACY
     || fullTapeFrameRuleErrors.length > 0
     );
-  const timelineContentWidth = Math.max(
-    900,
-    analysisTapeFrames.length * cameraRollZoom
-  );
   const filteredTapeFrames = filterPracticeTapeFrames(analysisTapeFrames, {
     rep: analysisCountFilter,
     step: analysisStepFilter
@@ -1563,8 +1261,6 @@ export default function PracticeMode({
   const cameraRollFrameWidth = filteredTapeFrames.length
     ? cameraRollContentWidth / filteredTapeFrames.length
     : cameraRollZoom;
-  const hasActiveTapeFilter =
-    analysisCountFilter !== "all" || analysisStepFilter !== "all";
   const filteredTapeCursorPosition = Math.max(
     0,
     filteredTapeFrames.findIndex((entry) => entry.index === fullTapeCursor)
@@ -1572,30 +1268,36 @@ export default function PracticeMode({
   const tapeRepFilterOptions = canonicalSessionAnalysis.repetitions.length
     ? canonicalSessionAnalysis.repetitions.map((repetition) => repetition.rep)
     : popupRepTape.map((repetition) => repetition.rep);
-  const displayedSessionAverage = canonicalSessionMetrics.completed_reps
-    ? Math.round(canonicalSessionMetrics.average_accuracy)
-    : Number.isFinite(correctedRuleSummary?.average_accuracy)
-      ? Math.round(correctedRuleSummary.average_accuracy * 100)
-    : Number.isFinite(authoritativeSession?.average_accuracy)
-      ? Math.round(authoritativeSession.average_accuracy)
-    : fullTapeAverageAccuracy;
-  const displayedCompletedReps = Number.isFinite(
-    canonicalSessionAnalysis?.clustered_completed_repetitions
-  )
-    ? canonicalSessionAnalysis.clustered_completed_repetitions
-    : Number.isFinite(analysisTapeMetadata?.clusteredCompletedReps)
-      ? analysisTapeMetadata.clusteredCompletedReps
-    : Number.isFinite(analysisTapeMetadata?.completedReps)
-      ? analysisTapeMetadata.completedReps
-    : Number.isFinite(authoritativeSession?.completed_reps)
-      ? authoritativeSession.completed_reps
-    : Number.isFinite(correctedRuleSummary?.completed_repetitions)
-      ? correctedRuleSummary.completed_repetitions
-    : popupRepTape.length;
+  const displayedSessionAverage = Number.isFinite(authoritativeSession?.average_accuracy)
+    ? Math.round(authoritativeSession.average_accuracy)
+    : canonicalSessionMetrics.completed_reps
+      ? Math.round(canonicalSessionMetrics.average_accuracy)
+      : Number.isFinite(correctedRuleSummary?.average_accuracy)
+        ? Math.round(correctedRuleSummary.average_accuracy * 100)
+        : fullTapeAverageAccuracy;
+  const completionEvidence = [
+    canonicalSessionAnalysis?.clustered_completed_repetitions,
+    analysisTapeMetadata?.clusteredCompletedReps,
+    analysisTapeMetadata?.completedReps,
+    authoritativeSession?.completed_reps,
+    correctedRuleSummary?.completed_repetitions,
+    popupRepTape.length
+  ].map(Number).filter(Number.isFinite);
+  const displayedCompletedReps = Math.min(
+    Number(tapeTargetReps) || 50,
+    Math.max(0, ...completionEvidence)
+  );
   const hasStrictRuleAnalysis = Boolean(analysisTapeMetadata?.ruleEngineAnalysis);
   const strictVerifiedReps = hasStrictRuleAnalysis
     ? canonicalSessionAnalysis.strict_verified_repetitions
     : null;
+  const sourceTiming = analysisTapeMetadata?.captureWindow?.sourceTiming || null;
+  const strictReplayReliable = Boolean(
+    sourceTiming &&
+    Number(sourceTiming.effectiveFps) >= 12 &&
+    Number(sourceTiming.duplicateFrameRatio) <= 0.35 &&
+    Number(sourceTiming.maxSourceGapMs) <= 500
+  );
   const fullTapeReviewFrames = analysisTapeFrames.filter(
     (frame) =>
       frame.scorable === true &&
@@ -1865,20 +1567,6 @@ export default function PracticeMode({
     if (diagnosticRecorderRef.current?.isActive()) {
       diagnosticRecorderRef.current.stop("component_unmounted");
     }
-  }, []);
-
-  const syncTimelineScroll = useCallback((source, targetRef) => {
-    if (timelineScrollSyncRef.current || !targetRef.current) return;
-    timelineScrollSyncRef.current = true;
-    const sourceRange = Math.max(1, source.scrollWidth - source.clientWidth);
-    const targetRange = Math.max(
-      0,
-      targetRef.current.scrollWidth - targetRef.current.clientWidth
-    );
-    targetRef.current.scrollLeft = (source.scrollLeft / sourceRange) * targetRange;
-    window.requestAnimationFrame(() => {
-      timelineScrollSyncRef.current = false;
-    });
   }, []);
 
   useEffect(() => {
@@ -2738,22 +2426,31 @@ export default function PracticeMode({
           },
           steps: steps.map((step, index) => ({
             id: step?.id ?? index,
-            step_name: step?.step_name || `Step ${index + 1}`
+            step_name: step?.step_name || `Step ${index + 1}`,
+            angles: (step?.angles || []).map((angle) => ({
+              body_part: angle.body_part,
+              min: angle.min,
+              max: angle.max,
+              target_angle: angle.target_angle ?? null
+            }))
           }))
         };
         const activeSessionId = sessionRef.current?.id;
         clearCountBeatTimers();
-        await Promise.all(
-          correctedAnalysis.repetitions
-            .filter((repetition) => repetition.status === "completed")
-            .map((repetition) => postPracticeRep(
-              repetition.rep,
-              Number(repetition.average_accuracy) || 0,
-              Number(repetition.duration_ms) || 0,
-              repetition.errors?.[0] || null,
-              repetition.errors?.[0] || null
-            ))
+        const completedRepetitions = correctedAnalysis.repetitions.filter(
+          (repetition) => repetition.status === "completed"
         );
+        // Each rep write refreshes the persisted session aggregate. Keep these
+        // writes ordered so an older aggregate cannot commit after a newer one.
+        for (const repetition of completedRepetitions) {
+          await postPracticeRep(
+            repetition.rep,
+            Number(repetition.average_accuracy) || 0,
+            Number(repetition.duration_ms) || 0,
+            repetition.errors?.[0] || null,
+            repetition.errors?.[0] || null
+          );
+        }
         await completePracticeSession(
           completed ? "completed" : "cancelled",
           correctedSummary
@@ -4186,8 +3883,8 @@ export default function PracticeMode({
             <div>
               <p className="eyebrow">Full session analysis</p>
               <strong>
-                Movement clusters {displayedCompletedReps}/{tapeTargetReps}
-                {hasStrictRuleAnalysis
+                Reconciled result {displayedCompletedReps}/{tapeTargetReps}
+                {hasStrictRuleAnalysis && strictReplayReliable && isAdminStudio
                   ? ` · Rule verified ${strictVerifiedReps}/${tapeTargetReps}`
                   : ""}
                 {" · "}
@@ -4214,9 +3911,21 @@ export default function PracticeMode({
             </div>
           </div>
 
-          {(hasStrictRuleAnalysis && strictVerifiedReps < displayedCompletedReps) || isAdminStudio ? (
+          {(hasStrictRuleAnalysis && !strictReplayReliable) ||
+          (hasStrictRuleAnalysis && strictReplayReliable && strictVerifiedReps < displayedCompletedReps) ||
+          isAdminStudio ? (
             <div className="practice-tape-popup__notices">
-              {hasStrictRuleAnalysis && strictVerifiedReps < displayedCompletedReps ? (
+              {hasStrictRuleAnalysis && !strictReplayReliable ? (
+                <div className="practice-session-analysis__finding is-transition" role="status">
+                  <span>Strict replay is diagnostic only</span>
+                  <strong>
+                    The stored source timing is too sparse or duplicated for strict frame-by-frame
+                    verification. The result above reconciles completed movement cycles and the
+                    persisted rep records.
+                  </strong>
+                </div>
+              ) : null}
+              {hasStrictRuleAnalysis && strictReplayReliable && strictVerifiedReps < displayedCompletedReps ? (
                 <div className="practice-session-analysis__finding is-warning" role="status">
                   <span>Movement detected, strict Jab not verified</span>
                   <strong>
@@ -4273,21 +3982,13 @@ export default function PracticeMode({
             </div>
           ) : null}
 
-          <PracticeAccuracyTimeline
-            countFilter={analysisCountFilter}
-            contentWidth={timelineContentWidth}
-            expanded={isCameraRollExpanded}
+          <SessionAccuracyChart
             frames={analysisTapeFrames}
-            onScroll={(event) =>
-              syncTimelineScroll(event.currentTarget, cameraRollScrollRef)
-            }
             onSelectFrame={(frameIndex) => {
               setIsFullTapePlaying(false);
               setFullTapeCursor(frameIndex);
             }}
-            scrollRef={accuracyTimelineScrollRef}
             selectedFrame={fullTapeCursor}
-            stepFilter={analysisStepFilter}
           />
 
           <div className="practice-session-analysis">
@@ -4370,33 +4071,24 @@ export default function PracticeMode({
                   : "Selected moment"}
               </h3>
               <div className="practice-session-analysis__frame-meta">
-                <span><small>Timestamp</small><strong>{formatTapeTime(fullTapeFrame?.elapsedMs || 0)}</strong></span>
-                <span>
-                  <small>Rep</small>
-                  <strong>
-                    {fullTapeFrameIsPreparation
-                      ? "Preparation"
-                      : displayedFrameRep || "--"}
-                  </strong>
-                </span>
-                <span>
-                  <small>Step</small>
-                  <strong>
-                    {fullTapeFrameIsPreparation
-                      ? "Preparation"
-                      : fullTapeFrame?.phase === "transition"
+                <SessionMomentFacts
+                  accuracy={Number.isFinite(fullTapeFrame?.accuracy)
+                    ? `${fullTapeFrame.accuracy}%`
+                    : "Not scored"}
+                  phase={fullTapeFrameIsPreparation
+                    ? "Waiting For Movement"
+                    : formatTemporalPhase(fullTapeFrame?.temporalPhase)}
+                  rep={fullTapeFrameIsPreparation
+                    ? "Preparation"
+                    : displayedFrameRep || "--"}
+                  step={fullTapeFrameIsPreparation
+                    ? "Preparation"
+                    : fullTapeFrame?.phase === "transition"
                       ? `Transition to ${fullTapeFrame?.step || "--"}`
-                      : fullTapeFrame?.step || "--"}
-                  </strong>
-                </span>
-                <span>
-                  <small>Sequence phase</small>
-                  <strong>
-                    {fullTapeFrameIsPreparation
-                      ? "Waiting For Movement"
-                      : formatTemporalPhase(fullTapeFrame?.temporalPhase)}
-                  </strong>
-                </span>
+                      : selectedAnalysisStep?.step_name || fullTapeFrame?.step || "--"}
+                  timestamp={formatTapeTime(fullTapeFrame?.elapsedMs || 0)}
+                  tracking={fullTapeFrame?.trackingReliable === false ? "Lost" : "Tracked"}
+                />
                 {isAdminStudio ? (
                   <>
                     <span>
@@ -4487,14 +4179,6 @@ export default function PracticeMode({
                     </span>
                   </>
                 ) : null}
-                <span>
-                  <small>Accuracy</small>
-                  <strong>
-                    {Number.isFinite(fullTapeFrame?.accuracy)
-                      ? `${fullTapeFrame.accuracy}%`
-                      : "Not scored"}
-                  </strong>
-                </span>
                 {isAdminStudio ? (
                   <>
                     <span>
@@ -4548,6 +4232,11 @@ export default function PracticeMode({
                     : "Target angles are within range"}
                 </strong>
               </div>
+
+              <SessionScoreReason
+                className="practice-session-analysis__score-reason"
+                explanation={selectedScoreExplanation}
+              />
 
               <p className="eyebrow">Full session</p>
               <div className="practice-session-analysis__summary">
@@ -4634,8 +4323,9 @@ export default function PracticeMode({
 
           <div className="practice-camera-roll-heading">
             <div>
-              <PracticeSessionMap
+              <SessionAnalysisMap
                 analysis={canonicalSessionAnalysis}
+                completedReps={displayedCompletedReps}
                 onSelectFrame={(frameIndex) => {
                   setIsFullTapePlaying(false);
                   setFullTapeCursor(frameIndex);
@@ -4745,13 +4435,6 @@ export default function PracticeMode({
           <div
             aria-label="All skeleton frames"
             className={`practice-camera-roll ${isCameraRollExpanded ? "is-expanded" : ""} ${cameraRollFrameWidth < 24 ? "is-compressed" : ""}`}
-            onScroll={
-              hasActiveTapeFilter
-                ? undefined
-                : (event) =>
-                    syncTimelineScroll(event.currentTarget, accuracyTimelineScrollRef)
-            }
-            ref={cameraRollScrollRef}
             style={{
               "--camera-roll-frame-width": `${cameraRollFrameWidth}px`,
               "--timeline-content-width": `${cameraRollContentWidth}px`

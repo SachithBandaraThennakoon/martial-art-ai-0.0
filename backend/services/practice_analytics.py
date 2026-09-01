@@ -2,7 +2,7 @@ import json
 import zlib
 
 
-ANALYTICS_SCHEMA_VERSION = 3
+ANALYTICS_SCHEMA_VERSION = 4
 
 
 def _number(value, default=0):
@@ -40,9 +40,23 @@ def extract_practice_analytics(metadata):
         if isinstance(key, (str, int))
     }
 
-    corrected_completed = metadata.get(
-        "canonicalCompletedReps",
-        corrected.get("completed_reps"),
+    post_session_completed = corrected.get("completed_reps")
+    strict_completed = rule_summary.get("completed_repetitions")
+    canonical_completed = metadata.get("canonicalCompletedReps")
+    completion_candidates = [
+        ("post_session_cluster", post_session_completed),
+        ("strict_rule_engine", strict_completed),
+        ("canonical_session", canonical_completed),
+    ]
+    available_completion_candidates = [
+        (source, max(0, _integer(value)))
+        for source, value in completion_candidates
+        if value is not None
+    ]
+    completion_source, corrected_completed = max(
+        available_completion_candidates,
+        key=lambda item: item[1],
+        default=("unavailable", 0),
     )
     completed_repetitions = max(
         0,
@@ -65,7 +79,25 @@ def extract_practice_analytics(metadata):
     return {
         "schema_version": ANALYTICS_SCHEMA_VERSION,
         "source": "post_session_rule_engine",
+        "completion_source": completion_source,
         "completed_repetitions": completed_repetitions,
+        "completion_evidence": {
+            "post_session_cluster": (
+                max(0, _integer(post_session_completed))
+                if post_session_completed is not None
+                else None
+            ),
+            "strict_rule_engine": (
+                max(0, _integer(strict_completed))
+                if strict_completed is not None
+                else None
+            ),
+            "canonical_session": (
+                max(0, _integer(canonical_completed))
+                if canonical_completed is not None
+                else None
+            ),
+        },
         "aborted_repetitions": aborted_repetitions,
         "average_response_time_ms": (
             max(0, _integer(rule_summary.get("average_response_time_ms")))

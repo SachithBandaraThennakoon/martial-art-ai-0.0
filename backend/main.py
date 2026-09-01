@@ -49,6 +49,7 @@ from routers import subscription as subscription_router
 from routers import contact as contact_router
 from routers import dashboard as dashboard_router
 from routers import privacy as privacy_router
+from routers import database_sync as database_sync_router
 
 # Services
 from services.angle_service import compare_angles
@@ -217,6 +218,7 @@ app.include_router(subscription_router.router)
 app.include_router(contact_router.router)
 app.include_router(dashboard_router.router)
 app.include_router(privacy_router.router)
+app.include_router(database_sync_router.router)
 
 
 # -----------------------------

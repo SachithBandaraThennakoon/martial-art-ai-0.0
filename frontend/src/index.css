@@ -10670,11 +10670,64 @@ select:focus {
   font-size: clamp(24px, 2.4vw, 34px);
 }
 
-.stored-tape-panel__details > div:not(.stored-tape-panel__summary),
+.stored-tape-panel__details > div:not(.stored-tape-panel__summary):not(.stored-tape-panel__score-reason),
 .stored-tape-panel__summary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 7px;
+}
+
+.stored-tape-panel__score-reason,
+.practice-session-analysis__score-reason {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 184, 86, .42);
+  border-radius: 8px;
+  background: rgba(255, 184, 86, .07);
+}
+
+.stored-tape-panel__score-reason.is-clean,
+.practice-session-analysis__score-reason.is-clean {
+  border-color: rgba(96, 211, 148, .38);
+  background: rgba(96, 211, 148, .06);
+}
+
+.stored-tape-panel__score-reason.is-transition,
+.practice-session-analysis__score-reason.is-transition {
+  border-color: rgba(106, 168, 255, .34);
+  background: rgba(106, 168, 255, .055);
+}
+
+.stored-tape-panel__score-reason > small,
+.practice-session-analysis__score-reason > small {
+  color: #ffca7a;
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.stored-tape-panel__score-reason > strong,
+.practice-session-analysis__score-reason > strong {
+  overflow: visible;
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  text-overflow: initial;
+  white-space: normal;
+}
+
+.stored-tape-panel__score-reason ul,
+.practice-session-analysis__score-reason ul {
+  display: grid;
+  gap: 4px;
+  margin: 2px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.4;
 }
 
 .stored-tape-panel__details span {
