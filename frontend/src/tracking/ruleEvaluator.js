@@ -3,6 +3,7 @@ function clamp(value, min = 0, max = 1) {
 }
 
 function finite(value) {
+  if (value === null || value === undefined || value === "") return null;
   return Number.isFinite(Number(value)) ? Number(value) : null;
 }
 

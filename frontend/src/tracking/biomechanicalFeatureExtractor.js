@@ -43,6 +43,30 @@ function vectorMagnitude(vector) {
   return Math.hypot(vector?.x || 0, vector?.y || 0, vector?.z || 0);
 }
 
+function subtract(first, second) {
+  if (!first || !second) return null;
+  return {
+    x: (first.x || 0) - (second.x || 0),
+    y: (first.y || 0) - (second.y || 0),
+    z: (first.z || 0) - (second.z || 0)
+  };
+}
+
+function normalizeVector(vector) {
+  const magnitude = vectorMagnitude(vector);
+  if (!magnitude) return null;
+  return {
+    x: vector.x / magnitude,
+    y: vector.y / magnitude,
+    z: vector.z / magnitude
+  };
+}
+
+function dot(first, second) {
+  if (!first || !second) return null;
+  return first.x * second.x + first.y * second.y + first.z * second.z;
+}
+
 function average(values) {
   const finiteValues = values.filter(Number.isFinite);
   if (!finiteValues.length) return 0;
@@ -100,6 +124,8 @@ export class BiomechanicalFeatureExtractor {
     this.previousTimestampMs = null;
     this.previous = null;
     this.stanceBaseline = { left: null, right: null };
+    this.guardWristVector = { left: null, right: null };
+    this.motionAxis = { left: null, right: null };
   }
 
   update(level1State, { leadSide = "left", kickSide = "right" } = {}) {
@@ -137,6 +163,7 @@ export class BiomechanicalFeatureExtractor {
     const shoulderCenter = midpoint(leftShoulder, rightShoulder);
     const hipCenter = midpoint(leftHip, rightHip);
     const leadReach = distance(leadWrist, leadShoulder);
+    const leadWristVector = subtract(leadWrist, leadShoulder);
     const kickReach = distance(kickAnkle, kickHip);
     const motionEnergy = average(
       Object.values(velocities).map(vectorMagnitude)
@@ -147,6 +174,38 @@ export class BiomechanicalFeatureExtractor {
         vectorMagnitude(velocities[LANDMARK[`${support}Ankle`]])
       ]) / 0.5
     );
+
+    const guardVector = this.guardWristVector[lead];
+    const displacementFromGuard = subtract(leadWristVector, guardVector);
+    const displacementMagnitude = vectorMagnitude(displacementFromGuard);
+    if (
+      displacementMagnitude > 0.035
+      && leadReach > (this.previous?.leadReach || leadReach) + 0.004
+    ) {
+      const candidateAxis = normalizeVector(displacementFromGuard);
+      const previousAxis = this.motionAxis[lead];
+      this.motionAxis[lead] = previousAxis
+        ? normalizeVector({
+            x: previousAxis.x * 0.8 + candidateAxis.x * 0.2,
+            y: previousAxis.y * 0.8 + candidateAxis.y * 0.2,
+            z: previousAxis.z * 0.8 + candidateAxis.z * 0.2
+          })
+        : candidateAxis;
+    }
+    const axisPosition = this.motionAxis[lead] && displacementFromGuard
+      ? dot(displacementFromGuard, this.motionAxis[lead])
+      : guardVector ? leadReach - vectorMagnitude(guardVector) : 0;
+    if (
+      leadWristVector
+      && (!guardVector || motionEnergy <= this.config.stableMotionThreshold)
+    ) {
+      const alpha = guardVector ? this.config.stanceBaselineAlpha : 1;
+      this.guardWristVector[lead] = {
+        x: (guardVector?.x || 0) * (1 - alpha) + leadWristVector.x * alpha,
+        y: (guardVector?.y || 0) * (1 - alpha) + leadWristVector.y * alpha,
+        z: (guardVector?.z || 0) * (1 - alpha) + leadWristVector.z * alpha
+      };
+    }
 
     const baseline = this.stanceBaseline[kick];
     const returnToStanceDistance = baseline && kickAnkle
@@ -174,6 +233,12 @@ export class BiomechanicalFeatureExtractor {
       lead_wrist_forward_velocity: radialVelocity(
         leadReach,
         this.previous?.leadReach,
+        deltaSeconds
+      ),
+      lead_wrist_punch_axis_position: axisPosition,
+      lead_wrist_punch_axis_velocity: radialVelocity(
+        axisPosition,
+        this.previous?.axisPosition,
         deltaSeconds
       ),
       rear_wrist_guard_distance: distance(rearWrist, rearShoulder),
@@ -212,6 +277,7 @@ export class BiomechanicalFeatureExtractor {
     this.previous = {
       leadElbowAngle,
       leadReach,
+      axisPosition,
       kickKneeAngle,
       kickReach,
       features

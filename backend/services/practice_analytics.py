@@ -2,7 +2,7 @@ import json
 import zlib
 
 
-ANALYTICS_SCHEMA_VERSION = 4
+ANALYTICS_SCHEMA_VERSION = 5
 
 
 def _number(value, default=0):
@@ -53,34 +53,80 @@ def extract_practice_analytics(metadata):
         for source, value in completion_candidates
         if value is not None
     ]
-    completion_source, corrected_completed = max(
-        available_completion_candidates,
-        key=lambda item: item[1],
-        default=("unavailable", 0),
+    is_rule_v2 = (
+        str(rule_summary.get("analysis_schema_version") or "") == "2.0"
+        or rule_summary.get("detected_attempts") is not None
     )
-    completed_repetitions = max(
-        0,
-        _integer(
-            corrected_completed
-            if corrected_completed is not None
-            else rule_summary.get("completed_repetitions")
-        ),
-    )
+    if is_rule_v2:
+        completion_source = "rule_engine_v2"
+        detected_attempts = max(0, _integer(rule_summary.get("detected_attempts")))
+        completed_motions = max(
+            0,
+            _integer(
+                rule_summary.get(
+                    "completed_motions",
+                    rule_summary.get("completed_repetitions"),
+                )
+            ),
+        )
+        # Keep the historical field as the performed-repetition count so older
+        # dashboard clients receive the same authoritative v2 value.
+        completed_repetitions = detected_attempts
+    else:
+        completion_source, corrected_completed = max(
+            available_completion_candidates,
+            key=lambda item: item[1],
+            default=("unavailable", 0),
+        )
+        completed_repetitions = max(0, _integer(corrected_completed))
+        detected_attempts = completed_repetitions
+        completed_motions = max(0, _integer(strict_completed, completed_repetitions))
     target_repetitions = metadata.get(
         "canonicalTargetReps",
         metadata.get("targetReps"),
     )
-    aborted_repetitions = (
-        max(0, _integer(target_repetitions) - completed_repetitions)
-        if target_repetitions is not None
-        else max(0, _integer(rule_summary.get("aborted_repetitions")))
-    )
+    if is_rule_v2:
+        aborted_repetitions = max(
+            0,
+            _integer(rule_summary.get("aborted_repetitions")),
+            detected_attempts - completed_motions,
+            _integer(target_repetitions) - completed_motions
+            if target_repetitions is not None else 0,
+        )
+    else:
+        aborted_repetitions = (
+            max(0, _integer(target_repetitions) - completed_repetitions)
+            if target_repetitions is not None
+            else max(0, _integer(rule_summary.get("aborted_repetitions")))
+        )
+
+    tracking_quality_percentage = rule_summary.get("tracking_quality_percentage")
+    if tracking_quality_percentage is None and rule_summary.get("tracking_quality") is not None:
+        tracking_quality_percentage = _number(rule_summary.get("tracking_quality")) * 100
 
     return {
         "schema_version": ANALYTICS_SCHEMA_VERSION,
         "source": "post_session_rule_engine",
         "completion_source": completion_source,
         "completed_repetitions": completed_repetitions,
+        "detected_attempts": detected_attempts,
+        "completed_motions": completed_motions,
+        "analysis_schema_version": (
+            str(rule_summary.get("analysis_schema_version"))
+            if is_rule_v2 else None
+        ),
+        "technique_quality": (
+            max(0, min(1, _number(rule_summary.get("technique_quality"))))
+            if rule_summary.get("technique_quality") is not None else None
+        ),
+        "detection_confidence": (
+            max(0, min(1, _number(rule_summary.get("detection_confidence"))))
+            if rule_summary.get("detection_confidence") is not None else None
+        ),
+        "consistency": (
+            max(0, min(1, _number(rule_summary.get("consistency"))))
+            if rule_summary.get("consistency") is not None else None
+        ),
         "completion_evidence": {
             "post_session_cluster": (
                 max(0, _integer(post_session_completed))
@@ -109,10 +155,10 @@ def extract_practice_analytics(metadata):
                 0,
                 min(
                     100,
-                    round(_number(rule_summary.get("tracking_quality_percentage")), 1),
+                    round(_number(tracking_quality_percentage), 1),
                 ),
             )
-            if rule_summary.get("tracking_quality_percentage") is not None
+            if tracking_quality_percentage is not None
             else None
         ),
         "common_form_errors": errors,
@@ -150,6 +196,22 @@ def _decode_payload(record):
         return payload if isinstance(payload, dict) else {}
     except (TypeError, json.JSONDecodeError):
         return {}
+
+
+def canonical_practice_rep_count(session, analytics=None):
+    """Return the v2 detected-attempt count, falling back for legacy sessions."""
+    analytics = analytics if isinstance(analytics, dict) else {}
+    if analytics.get("detected_attempts") is not None:
+        return max(0, _integer(analytics.get("detected_attempts")))
+    return max(0, _integer(getattr(session, "completed_reps", 0)))
+
+
+def canonical_practice_accuracy(session, analytics=None):
+    """Return v2 biomechanical quality as a percentage when it is available."""
+    analytics = analytics if isinstance(analytics, dict) else {}
+    if analytics.get("technique_quality") is not None:
+        return max(0, min(100, _number(analytics.get("technique_quality")) * 100))
+    return max(0, min(100, _number(getattr(session, "average_accuracy", 0))))
 
 
 def load_practice_analytics(db, session_ids):

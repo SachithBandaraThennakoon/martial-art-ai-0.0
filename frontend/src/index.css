@@ -1832,6 +1832,14 @@ select:focus {
 }
 
 @media (min-width: 1181px) {
+  /* Keep the technique panel below the two-row admin evaluation toolbar. */
+  .training-shell--admin:not(.training-shell--analysis) .training-panel--left,
+  .app-shell--studio
+    .training-shell--admin:not(.training-shell--analysis)
+    .training-panel--left {
+    top: 230px;
+  }
+
   .training-shell--admin:not(.training-shell--analysis) .studio-mode-switch,
   .app-shell--studio
     .training-shell--admin:not(.training-shell--analysis)
@@ -4070,6 +4078,12 @@ select:focus {
   font-size: 11px;
 }
 
+.coach-toggle-button--level2.is-active {
+  border-color: rgba(106, 168, 255, .72);
+  color: #dceaff;
+  background: rgba(106, 168, 255, .18);
+}
+
 .data-schema {
   display: grid;
   gap: 2px;
@@ -5714,6 +5728,22 @@ select:focus {
 .site-footer__signature a:hover { color: var(--text); }
 
 .studio-method { width: 100%; max-width: none; margin: 56px auto 0; padding: 32px; border: 1px solid var(--line); border-radius: 16px; background: linear-gradient(145deg, rgba(106,168,255,.06), transparent 45%); }
+.admin-practice-upload { display: grid; grid-template-columns: minmax(0,.9fr) minmax(420px,1.1fr); gap: 34px; align-items: end; border-color: rgba(106,168,255,.3); }
+.admin-practice-upload__form { display: grid; gap: 16px; padding: 20px; border: 1px solid var(--line); border-radius: 12px; background: rgba(0,0,0,.24); }
+.admin-practice-upload__form > label { display: grid; gap: 7px; color: var(--muted); font-size: .78rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+.admin-practice-upload__form select { width: 100%; min-height: 44px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: #101714; }
+.admin-practice-upload__form fieldset { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; margin: 0; padding: 0; border: 0; }
+.admin-practice-upload__form legend { margin-bottom: 8px; color: var(--muted); font-size: .72rem; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
+.admin-practice-upload__form fieldset label { position: relative; display: grid; gap: 5px; min-height: 92px; padding: 13px; border: 1px solid var(--line); border-radius: 9px; cursor: pointer; background: rgba(255,255,255,.025); }
+.admin-practice-upload__form fieldset label.is-active { border-color: #6aa8ff; background: rgba(106,168,255,.1); }
+.admin-practice-upload__form fieldset input { position: absolute; opacity: 0; pointer-events: none; }
+.admin-practice-upload__form fieldset small { color: var(--muted); line-height: 1.4; }
+.admin-practice-upload__form > p { margin: 0; color: #ff9f9f; font-size: .78rem; }
+.admin-analysis-engine { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.admin-analysis-engine > span { margin-right: 4px; color: #82968e; font-size: .65rem; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
+.admin-analysis-engine button { min-height: 30px !important; padding: 5px 10px !important; }
+@media (max-width: 1000px) { .admin-practice-upload { grid-template-columns: 1fr; } }
+@media (max-width: 620px) { .admin-practice-upload__form fieldset { grid-template-columns: 1fr; } }
 .studio-method__heading { max-width: 760px; }
 .studio-method__heading h2 { margin: 8px 0 12px; font-size: clamp(36px, 4vw, 60px); line-height: .98; letter-spacing: -.045em; }
 .studio-method__heading > p:last-child { color: var(--muted); line-height: 1.65; }
@@ -13663,6 +13693,17 @@ select:focus {
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.48);
 }
 
+/* Admin train/practice uses a second toolbar row for evaluation controls. */
+@media (min-width: 1181px) {
+  .training-shell--admin:not(.training-shell--analysis) .studio-mode-switch,
+  .app-shell--studio
+    .training-shell--admin:not(.training-shell--analysis)
+    .studio-mode-switch {
+    height: auto;
+    min-height: 0;
+  }
+}
+
 /* Guests may leave Analysis through the mode controller; results stay gated. */
 .guest-preview-gate__background--interactive {
   inset: 0;
@@ -13876,4 +13917,405 @@ select:focus {
     top: 138px;
     max-height: calc(100dvh - 150px);
   }
+}
+
+/* Focused admin video analyzer */
+.admin-video-analysis {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  min-height: 100dvh;
+  align-content: start;
+  gap: 16px;
+  padding: 96px 24px 48px;
+  color: var(--text);
+  background: #080b0f;
+}
+
+.admin-video-analysis__header,
+.admin-video-analysis__controls,
+.admin-video-analysis__workspace,
+.admin-video-analysis__results {
+  width: min(1480px, 100%);
+  margin: 0 auto;
+}
+
+.admin-video-analysis__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.admin-video-analysis__header h1 {
+  margin: 5px 0 7px;
+  font-size: clamp(28px, 4vw, 44px);
+}
+
+.admin-video-analysis__header p:last-child {
+  margin: 0;
+  color: var(--muted);
+}
+
+.admin-video-analysis__controls {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(330px, 1.4fr) 150px minmax(260px, 1fr);
+  align-items: end;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #10141a;
+}
+
+.admin-video-analysis__controls > label,
+.admin-video-analysis__controls fieldset {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.admin-video-analysis__controls > label > span,
+.admin-video-analysis__controls legend {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.admin-video-analysis__controls select,
+.admin-video-analysis__controls input[type="number"],
+.admin-video-analysis__controls input[type="file"] {
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--text);
+  background: #090c10;
+}
+
+.admin-video-analysis__controls fieldset {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.admin-video-analysis__controls legend {
+  grid-column: 1 / -1;
+}
+
+.admin-video-analysis__controls fieldset label {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  background: #090c10;
+}
+
+.admin-video-analysis__file small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-video-analysis__actions {
+  display: flex;
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.admin-video-analysis__workspace {
+  display: grid;
+  min-height: 520px;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 14px;
+}
+
+.admin-video-analysis__preview {
+  position: relative;
+  min-height: 520px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #000;
+}
+
+.admin-video-analysis__preview > p {
+  display: grid;
+  height: 100%;
+  margin: 0;
+  color: var(--muted);
+  place-items: center;
+}
+
+.admin-video-analysis__status {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #10141a;
+}
+
+.admin-video-analysis__status > div {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #090c10;
+}
+
+.admin-video-analysis__status span,
+.admin-video-analysis__result header span,
+.admin-video-analysis__metrics span {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+
+.admin-video-analysis__status strong {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.admin-video-analysis__results {
+  display: grid;
+  gap: 14px;
+}
+
+.admin-video-analysis__completed-analysis,
+.admin-video-analysis__session-panels {
+  display: grid;
+  width: min(1480px, 100%);
+  gap: 16px;
+  margin: 0 auto;
+}
+
+.admin-video-analysis__session-group {
+  display: grid;
+  gap: 12px;
+}
+
+.admin-video-analysis__timeline {
+  width: 100%;
+}
+
+.admin-video-analysis__timeline .stored-tape-panel__body {
+  display: grid;
+}
+
+.admin-video-analysis__timeline .stored-tape-panel__body > input[type="range"] {
+  width: 100%;
+}
+
+.admin-video-analysis__frame-inspection {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(240px, .7fr);
+  gap: 12px;
+}
+
+.admin-video-analysis__frame-inspection > div {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #090c10;
+}
+
+.admin-video-analysis__frame-inspection h2 {
+  margin: 0 0 10px;
+  font-size: 13px;
+}
+
+.admin-video-analysis__frame-inspection ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.admin-video-analysis__frame-inspection li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.admin-video-analysis__popup {
+  position: fixed;
+  inset: 76px 18px 18px;
+  z-index: 100;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid rgba(106, 168, 255, .42);
+  border-radius: 12px;
+  background: #090c10;
+  box-shadow: 0 28px 90px rgba(0, 0, 0, .82);
+}
+
+.admin-video-analysis__popup > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  background: #11161d;
+}
+
+.admin-video-analysis__popup > header .eyebrow {
+  margin: 0 0 4px;
+}
+
+.admin-video-analysis__popup > header button,
+.admin-video-analysis__popup-tabs button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--muted);
+  cursor: pointer;
+  font-weight: 900;
+  background: #080b0f;
+}
+
+.admin-video-analysis__popup-tabs {
+  display: flex;
+  gap: 7px;
+  padding: 9px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.admin-video-analysis__popup-tabs button.is-active {
+  border-color: rgba(106, 168, 255, .65);
+  color: var(--text);
+  background: rgba(106, 168, 255, .12);
+}
+
+.admin-video-analysis__popup-body {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  overflow-y: auto;
+  padding: 14px;
+}
+
+.admin-video-analysis__results.is-comparison {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.admin-video-analysis__result {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #10141a;
+}
+
+.admin-video-analysis__result > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.admin-video-analysis__result header div,
+.admin-video-analysis__result header span,
+.admin-video-analysis__result header strong {
+  display: grid;
+  gap: 5px;
+}
+
+.admin-video-analysis__result header small {
+  color: var(--muted);
+}
+
+.admin-video-analysis__metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.admin-video-analysis__metrics > div {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #090c10;
+}
+
+.admin-video-analysis__result h2 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.admin-video-analysis__result ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.admin-video-analysis__result li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: capitalize;
+}
+
+.admin-video-analysis__warning {
+  margin: 0;
+  padding: 10px;
+  border: 1px solid rgba(255, 186, 73, .35);
+  border-radius: 7px;
+  color: #ffd18a;
+  font-size: 11px;
+  background: rgba(255, 186, 73, .07);
+}
+
+@media (max-width: 1050px) {
+  .admin-video-analysis__controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .admin-video-analysis__workspace { grid-template-columns: 1fr; }
+  .admin-video-analysis__status { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 720px) {
+  .admin-video-analysis { padding: 84px 14px 32px; }
+  .admin-video-analysis__header { flex-direction: column; }
+  .admin-video-analysis__controls,
+  .admin-video-analysis__results.is-comparison,
+  .admin-video-analysis__status { grid-template-columns: 1fr; }
+  .admin-video-analysis__controls fieldset { grid-template-columns: 1fr; }
+  .admin-video-analysis__preview { min-height: 360px; }
+  .admin-video-analysis__metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .admin-video-analysis__frame-inspection { grid-template-columns: 1fr; }
+  .admin-video-analysis__popup { inset: 68px 6px 6px; }
 }

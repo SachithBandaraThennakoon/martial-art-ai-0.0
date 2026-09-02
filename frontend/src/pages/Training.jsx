@@ -43,11 +43,24 @@ export default function TrainingStudio({ analysisPreview = false, studioMode = "
     return STUDIO_PERFORMANCE_MODES[storedMode] ? storedMode : "auto";
   });
   const [skeletonLayers, setSkeletonLayers] = useState({
-    level1: false
+    level1: false,
+    level2: false
   });
-  const [adminInputSource, setAdminInputSource] = useState("live");
-  const [adminVideo, setAdminVideo] = useState(null);
-  const [adminInputStatus, setAdminInputStatus] = useState("Live camera selected");
+  const importedAdminVideo = isAdminStudio
+    ? location.state?.adminPracticeUpload || null
+    : null;
+  const [adminInputSource, setAdminInputSource] = useState(
+    () => importedAdminVideo ? "video" : "live"
+  );
+  const [adminVideo, setAdminVideo] = useState(() => importedAdminVideo);
+  const [adminInputStatus, setAdminInputStatus] = useState(
+    () => importedAdminVideo
+      ? `Video ready: ${importedAdminVideo.name}`
+      : "Live camera selected"
+  );
+  const [adminAnalysisEngine, setAdminAnalysisEngine] = useState(
+    () => importedAdminVideo?.analysisEngine || "both"
+  );
   const videoInputRef = useRef(null);
   const bodyCalibration = useBodyCalibration();
   const requestedMode = searchParams.get("mode");
@@ -318,6 +331,25 @@ export default function TrainingStudio({ analysisPreview = false, studioMode = "
                 {adminVideo.name} · {(adminVideo.size / (1024 * 1024)).toFixed(1)} MB
               </small>
             ) : null}
+            <div className="admin-analysis-engine" role="radiogroup" aria-label="Practice analysis engine">
+              <span>Analyzer</span>
+              {[
+                ["both", "Both"],
+                ["rules", "Rules"],
+                ["model", "Model"]
+              ].map(([value, label]) => (
+                <button
+                  aria-checked={adminAnalysisEngine === value}
+                  className={adminAnalysisEngine === value ? "is-active" : ""}
+                  key={value}
+                  onClick={() => setAdminAnalysisEngine(value)}
+                  role="radio"
+                  type="button"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
         ) : null}
 
@@ -330,6 +362,14 @@ export default function TrainingStudio({ analysisPreview = false, studioMode = "
               type="button"
             >
               Yellow L1 {activeSkeletonLayers.level1 ? "On" : "Off"}
+            </button>
+            <button
+              aria-pressed={activeSkeletonLayers.level2}
+              className={`coach-toggle-button coach-toggle-button--level2 ${activeSkeletonLayers.level2 ? "is-active" : ""}`}
+              onClick={() => toggleSkeletonLayer("level2")}
+              type="button"
+            >
+              Blue L2 {activeSkeletonLayers.level2 ? "On" : "Off"}
             </button>
           </div>
         ) : null}
@@ -361,6 +401,9 @@ export default function TrainingStudio({ analysisPreview = false, studioMode = "
           inputVideoUrl={adminVideo?.url || null}
           inputVideoName={adminVideo?.name || null}
           onInputStatus={setAdminInputStatus}
+          analysisEngine={isAdminStudio ? adminAnalysisEngine : "auto"}
+          autoStartVideoAnalysis={Boolean(importedAdminVideo)}
+          initialTargetReps={importedAdminVideo?.targetReps}
         />
       ) : mode === "practice" ? (
         <PracticeMode
@@ -381,6 +424,7 @@ export default function TrainingStudio({ analysisPreview = false, studioMode = "
           inputVideoUrl={adminVideo?.url || null}
           inputVideoName={adminVideo?.name || null}
           onInputStatus={setAdminInputStatus}
+          analysisEngine={isAdminStudio ? adminAnalysisEngine : "auto"}
         />
       ) : (
         <PracticeAnalysisMode

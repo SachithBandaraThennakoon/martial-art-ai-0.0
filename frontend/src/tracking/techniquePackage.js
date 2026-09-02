@@ -16,6 +16,17 @@ const SUPPORTED_TEMPORAL_INFERENCE_SOURCES = new Set([
   "rules"
 ]);
 
+const SUPPORTED_ACTIVITY_PROFILES = new Set([
+  "cyclic_repetition",
+  "alternating_repetition",
+  "static_hold",
+  "continuous_movement",
+  "sequence",
+  "form_sequence",
+  "reaction_event",
+  "free_movement"
+]);
+
 const REQUIRED_PARTS = [
   "manifest",
   "states",
@@ -108,6 +119,26 @@ export function validateTechniquePackage(source) {
   }
 
   const { manifest, states, transitions, errors, modes } = source;
+  const analysisConfig = source.analysis_config;
+  if (analysisConfig !== undefined) {
+    if (!isRecord(analysisConfig)) {
+      issues.push("analysis_config must be an object");
+    } else {
+      if (analysisConfig.schema_version !== "2.0") {
+        issues.push('analysis_config.schema_version must be "2.0"');
+      }
+      const profileType = analysisConfig.activity_profile?.type;
+      if (!SUPPORTED_ACTIVITY_PROFILES.has(profileType)) {
+        issues.push(`analysis_config.activity_profile.type "${profileType}" is not supported`);
+      }
+      if (!isNonEmptyString(analysisConfig.activity_profile?.detector)) {
+        issues.push("analysis_config.activity_profile.detector is required");
+      }
+      if (!isRecord(analysisConfig.rep_detector)) {
+        issues.push("analysis_config.rep_detector is required");
+      }
+    }
+  }
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(manifest.id || "")) {
     issues.push("manifest.id must be a lowercase kebab-case identifier");
   }
@@ -313,6 +344,9 @@ export function createTechniquePackage(source) {
     },
     getTemporalInferenceSource() {
       return source.manifest.temporal_inference?.source || "auto";
+    },
+    getAnalysisConfig() {
+      return source.analysis_config || null;
     },
     getCanonicalPhase(stateName, event = null, candidateState = null) {
       const inference = source.manifest.temporal_inference || {};

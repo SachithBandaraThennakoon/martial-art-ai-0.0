@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useState } from "react";
-import { Link } from "react-router";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { Link, useNavigate } from "react-router";
 import { slugify } from "../data/techniqueCatalog";
 import { useCatalog } from "../context/CatalogContext";
 import { API_BASE_URL } from "../services/api";
@@ -17,12 +17,18 @@ const CATEGORY_DETAILS = {
 };
 
 export default function Studio({ isAdminStudio = false }) {
+  const navigate = useNavigate();
   const { catalog, status: catalogStatus, refreshCatalog } = useCatalog();
   const [query, setQuery] = useState("");
   const [refreshingCatalog, setRefreshingCatalog] = useState(false);
   const [catalogRefreshMessage, setCatalogRefreshMessage] = useState("");
   const [syncingDatabase, setSyncingDatabase] = useState(false);
   const [databaseSyncMessage, setDatabaseSyncMessage] = useState("");
+  const [practiceTechniqueKey, setPracticeTechniqueKey] = useState("");
+  const [practiceAnalysisEngine, setPracticeAnalysisEngine] = useState("both");
+  const [practiceTargetReps, setPracticeTargetReps] = useState(3);
+  const [practiceUploadMessage, setPracticeUploadMessage] = useState("");
+  const practiceVideoInputRef = useRef(null);
   const normalizedQuery = query.trim().toLowerCase();
 
   const handleSystemCatalogRefresh = useCallback(async () => {
@@ -112,6 +118,59 @@ export default function Studio({ isAdminStudio = false }) {
       })
       .filter((category) => category.matches.length > 0);
   }, [catalog, normalizedQuery]);
+
+  const practiceTechniques = useMemo(
+    () => catalog.flatMap((category) =>
+      category.subcategories.flatMap((subcategory) =>
+        subcategory.techniques
+          .filter((technique) => technique.runtimeReady !== false)
+          .map((technique) => ({
+            category: category.category,
+            subcategory: subcategory.name,
+            technique
+          }))
+      )
+    ),
+    [catalog]
+  );
+  const selectedPracticeTechnique = practiceTechniques.find(
+    (entry) => String(entry.technique.id || entry.technique.name) === practiceTechniqueKey
+  ) || practiceTechniques.find(
+    (entry) => entry.technique.name.trim().toLowerCase() === "jab"
+  ) || practiceTechniques[0];
+
+  const openPracticeVideoAnalysis = useCallback((event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || !selectedPracticeTechnique) return;
+    if (!file.type.startsWith("video/")) {
+      setPracticeUploadMessage("Unsupported file. Choose an MP4, WebM, MOV, or another video file.");
+      return;
+    }
+
+    const videoUrl = URL.createObjectURL(file);
+    const { category, subcategory, technique } = selectedPracticeTechnique;
+    navigate({
+      pathname: "/admin-training",
+      search: new URLSearchParams({
+        category: slugify(category),
+        subcategory: slugify(subcategory),
+        technique: technique.name,
+        mode: "practice"
+      }).toString()
+    }, {
+      state: {
+        adminPracticeUpload: {
+          url: videoUrl,
+          name: file.name,
+          size: file.size,
+          type: file.type,
+          analysisEngine: practiceAnalysisEngine,
+          targetReps: practiceTargetReps
+        }
+      }
+    });
+  }, [navigate, practiceAnalysisEngine, practiceTargetReps, selectedPracticeTechnique]);
 
   return (
     <main className={`studio-page ${isAdminStudio ? "studio-page--admin" : ""}`}>
@@ -300,18 +359,98 @@ export default function Studio({ isAdminStudio = false }) {
             <div className="studio-readiness"><strong>Before you begin</strong><span>Keep your full body in frame</span><span>Clear floor space</span><span>Even lighting from the front</span><span>Camera at waist–chest height</span></div>
           </section>
         ) : (
-          <section className="studio-method" aria-label="Technique authoring workflow">
-            <div className="studio-method__heading">
-              <p className="eyebrow">Technique data</p>
-              <h2>Maintain reviewed angle targets.</h2>
-              <p>Author each step with explicit joint ranges used by the deterministic L1–L4 feedback engine.</p>
-            </div>
-            <div className="studio-hero__actions">
-              <Link className="btn btn--light" to="/admin-manual-catalog">
-                Open manual catalog
-              </Link>
-            </div>
-          </section>
+          <>
+            <section className="studio-method admin-practice-upload" aria-label="Practice video analysis">
+              <div className="studio-method__heading">
+                <p className="eyebrow">Practice mode test shortcut</p>
+                <h2>Upload once. Inspect both analyzers.</h2>
+                <p>Select a technique and video here. Admin Practice opens with the file ready, then shows the full-session analysis popup after the set finishes.</p>
+                <Link className="btn btn--ghost" to="/admin-video-analysis">
+                  Open dedicated video analyzer
+                </Link>
+              </div>
+              <div className="admin-practice-upload__form">
+                <label>
+                  <span>Technique</span>
+                  <select
+                    aria-label="Practice analysis technique"
+                    onChange={(event) => setPracticeTechniqueKey(event.target.value)}
+                    value={String(selectedPracticeTechnique?.technique.id || selectedPracticeTechnique?.technique.name || "")}
+                  >
+                    {practiceTechniques.map((entry) => (
+                      <option
+                        key={`${entry.category}:${entry.subcategory}:${entry.technique.id || entry.technique.name}`}
+                        value={String(entry.technique.id || entry.technique.name)}
+                      >
+                        {entry.technique.name} · {entry.subcategory}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <fieldset>
+                  <legend>Analysis engine</legend>
+                  {[
+                    ["both", "Both", "Canonical rule result + learned-model comparison"],
+                    ["rules", "Rule-based", "Deterministic technique rules only"],
+                    ["model", "Model", "ONNX temporal model as the primary analyzer"]
+                  ].map(([value, label, description]) => (
+                    <label className={practiceAnalysisEngine === value ? "is-active" : ""} key={value}>
+                      <input
+                        checked={practiceAnalysisEngine === value}
+                        name="practice-analysis-engine"
+                        onChange={() => setPracticeAnalysisEngine(value)}
+                        type="radio"
+                        value={value}
+                      />
+                      <strong>{label}</strong>
+                      <small>{description}</small>
+                    </label>
+                  ))}
+                </fieldset>
+                <label>
+                  <span>Expected repetitions</span>
+                  <select
+                    aria-label="Expected practice repetitions"
+                    onChange={(event) => setPracticeTargetReps(Number(event.target.value))}
+                    value={practiceTargetReps}
+                  >
+                    <option value="3">3 reps</option>
+                    <option value="5">5 reps</option>
+                    <option value="10">10 reps</option>
+                  </select>
+                </label>
+                <button
+                  className="btn btn--light"
+                  disabled={!selectedPracticeTechnique}
+                  onClick={() => practiceVideoInputRef.current?.click()}
+                  type="button"
+                >
+                  Choose video and open Practice
+                </button>
+                <input
+                  accept="video/mp4,video/webm,video/quicktime,video/*"
+                  aria-label="Upload practice analysis video"
+                  hidden
+                  onChange={openPracticeVideoAnalysis}
+                  ref={practiceVideoInputRef}
+                  type="file"
+                />
+                {practiceUploadMessage ? <p role="alert">{practiceUploadMessage}</p> : null}
+              </div>
+            </section>
+            <section className="studio-method" aria-label="Technique authoring workflow">
+              <div className="studio-method__heading">
+                <p className="eyebrow">Technique data</p>
+                <h2>Maintain reviewed angle targets.</h2>
+                <p>Author each step with explicit joint ranges used by the deterministic L1–L4 feedback engine.</p>
+              </div>
+              <div className="studio-hero__actions">
+                <Link className="btn btn--light" to="/admin-manual-catalog">
+                  Open manual catalog
+                </Link>
+              </div>
+            </section>
+          </>
         )}
 
         <footer className="studio-footer-note">

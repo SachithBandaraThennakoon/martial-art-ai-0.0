@@ -21,6 +21,11 @@ const formatDateTime = (value) => {
 const metric = (value, suffix = "") =>
   value === null || value === undefined ? "--" : `${value}${suffix}`;
 
+const percentage = (value) =>
+  Number.isFinite(Number(value))
+    ? Number((Number(value) * 100).toFixed(1))
+    : null;
+
 export default function SessionAnalysisPanel({
   eyebrow = "Session analysis",
   session,
@@ -37,11 +42,21 @@ export default function SessionAnalysisPanel({
   }
 
   const analytics = session.analytics || session;
-  const accuracy = session.average_accuracy ?? session.accuracy;
-  const completedReps = session.completed_reps ?? session.reps;
+  const isAnalysisV2 = analytics.analysis_schema_version === "2.0";
+  const accuracy = isAnalysisV2
+    ? percentage(analytics.technique_quality)
+    : session.average_accuracy ?? session.accuracy;
+  const completedReps = isAnalysisV2
+    ? analytics.detected_attempts
+    : session.completed_reps ?? session.reps;
   const targetReps = session.target_reps;
-  const consistency = session.consistency_score ?? session.consistency;
-  const tracking = analytics.tracking_quality_percentage ?? session.tracking_quality;
+  const consistency = isAnalysisV2
+    ? percentage(analytics.consistency)
+    : session.consistency_score ?? session.consistency;
+  const tracking = analytics.tracking_quality_percentage
+    ?? (Number.isFinite(analytics.tracking_quality)
+      ? Number((analytics.tracking_quality * 100).toFixed(1))
+      : session.tracking_quality);
   const responseTime =
     analytics.average_response_time_ms ?? session.average_response_time_ms;
   const incomplete =
@@ -70,9 +85,9 @@ export default function SessionAnalysisPanel({
       </header>
 
       <div className="session-analysis-panel__metrics">
-        <div><span>Corrected form</span><strong>{metric(accuracy, "%")}</strong></div>
+        <div><span>{isAnalysisV2 ? "Technique quality" : "Corrected form"}</span><strong>{metric(accuracy, "%")}</strong></div>
         <div>
-          <span>Repetitions</span>
+          <span>{isAnalysisV2 ? "Detected attempts" : "Repetitions"}</span>
           <strong>
             {completedReps == null
               ? "--"
@@ -81,11 +96,17 @@ export default function SessionAnalysisPanel({
                 : `${completedReps}/${targetReps}`}
           </strong>
         </div>
+        {isAnalysisV2 ? (
+          <div><span>Completed motions</span><strong>{metric(analytics.completed_motions)}</strong></div>
+        ) : null}
+        {isAnalysisV2 ? (
+          <div><span>Detection confidence</span><strong>{metric(percentage(analytics.detection_confidence), "%")}</strong></div>
+        ) : null}
         <div><span>Consistency</span><strong>{metric(consistency, "%")}</strong></div>
         <div><span>Tracking quality</span><strong>{metric(tracking, "%")}</strong></div>
-        <div><span>Response time</span><strong>{metric(responseTime, "ms")}</strong></div>
-        <div><span>Incomplete reps</span><strong>{metric(incomplete)}</strong></div>
-        <div><span>Timeline corrections</span><strong>{metric(corrections)}</strong></div>
+        {!isAnalysisV2 ? <div><span>Response time</span><strong>{metric(responseTime, "ms")}</strong></div> : null}
+        <div><span>{isAnalysisV2 ? "Incomplete motions" : "Incomplete reps"}</span><strong>{metric(incomplete)}</strong></div>
+        {!isAnalysisV2 ? <div><span>Timeline corrections</span><strong>{metric(corrections)}</strong></div> : null}
         <div><span>Clean reps</span><strong>{metric(session.clean_reps)}</strong></div>
       </div>
 

@@ -140,7 +140,8 @@ export default function TrainMode({
   inputVideoUrl,
   inputVideoName,
   onInputStatus,
-  onPredictionStatus
+  onPredictionStatus,
+  analysisEngine = "auto"
 }) {
   const currentTechnique = useMemo(
     () =>
@@ -1677,6 +1678,7 @@ export default function TrainMode({
           inputVideoName={inputVideoName}
           onInputStatus={onInputStatus}
           onPredictionStatus={onPredictionStatus}
+          temporalInferenceMode={analysisEngine}
           displayMirrored={displayMirrored}
           skeletonLayers={skeletonLayers}
           bodyCalibration={bodyCalibration?.profile}

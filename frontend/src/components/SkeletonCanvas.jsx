@@ -329,6 +329,58 @@ function waitForVideoMetadata(video) {
   });
 }
 
+function resolveFiniteVideoDuration(video) {
+  if (Number.isFinite(video?.duration) && video.duration > 0) {
+    return Promise.resolve(video.duration);
+  }
+  if (!video) return Promise.resolve(null);
+
+  return new Promise((resolve) => {
+    let timerId;
+    const eventNames = ["durationchange", "seeked", "timeupdate"];
+    const cleanup = () => {
+      window.clearTimeout(timerId);
+      eventNames.forEach((eventName) => video.removeEventListener(eventName, check));
+    };
+    const finish = (duration = null) => {
+      cleanup();
+      resolve(duration);
+    };
+    const check = () => {
+      if (Number.isFinite(video.duration) && video.duration > 0) {
+        finish(video.duration);
+      }
+    };
+    eventNames.forEach((eventName) => video.addEventListener(eventName, check));
+    timerId = window.setTimeout(() => finish(null), 5000);
+    // MediaRecorder WebM files often expose Infinity until the browser seeks
+    // beyond their final cluster. The seek makes the actual duration known.
+    try {
+      video.currentTime = Number.MAX_SAFE_INTEGER;
+    } catch {
+      finish(null);
+    }
+  });
+}
+
+function seekVideo(video, timeSeconds) {
+  if (!video) return Promise.resolve();
+  if (!video.seeking && Math.abs(video.currentTime - timeSeconds) < 0.001) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    let timerId;
+    const finish = () => {
+      window.clearTimeout(timerId);
+      video.removeEventListener("seeked", finish);
+      resolve();
+    };
+    video.addEventListener("seeked", finish, { once: true });
+    timerId = window.setTimeout(finish, 3000);
+    video.currentTime = timeSeconds;
+  });
+}
+
 function syncCanvasToVideo(canvas, video) {
   if (!canvas || !video) return;
 
@@ -818,7 +870,8 @@ export default function SkeletonCanvas({
   inputVideoUrl = null,
   inputVideoName = null,
   onInputStatus,
-  onPredictionStatus
+  onPredictionStatus,
+  temporalInferenceMode = "auto"
 }) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
@@ -832,6 +885,14 @@ export default function SkeletonCanvas({
   const practiceRecorderTypeRef = useRef("video/webm");
   const practiceVideoFrameRateRef = useRef(null);
   const replayActiveRef = useRef(false);
+  const uploadedAnalysisRef = useRef({
+    active: false,
+    sampleIntervalMs: 1000 / 30,
+    frameIndex: 0,
+    lastVideoTimestampMs: null,
+    seeking: false,
+    durationMs: null
+  });
   const visionRef = useRef(null);
   const wsRef = useRef(null);
   const previousPoseRef = useRef(null);
@@ -886,6 +947,7 @@ export default function SkeletonCanvas({
   const temporalPhasePredictorRef = useRef(null);
   const temporalPredictorLoadRef = useRef(null);
   const temporalPredictorGenerationRef = useRef(0);
+  const temporalInferenceModeRef = useRef(temporalInferenceMode);
   const trackingSessionActiveRef = useRef(trackingSessionActive);
   const trackingSessionPausedRef = useRef(trackingSessionPaused);
   const bodyCalibrationRef = useRef(bodyCalibration);
@@ -1001,7 +1063,7 @@ export default function SkeletonCanvas({
 
   const analyzePracticeVideoCapture = useCallback(async (
     blob,
-    { sampleFps = 15, maximumDurationMs = 300_000 } = {}
+    { sampleFps = 30, maximumDurationMs = 300_000 } = {}
   ) => {
     if (!blob?.size) return null;
     const replayVideo = document.createElement("video");
@@ -1154,6 +1216,30 @@ export default function SkeletonCanvas({
       start: startPracticeVideoCapture,
       stop: stopPracticeVideoCapture,
       analyze: analyzePracticeVideoCapture,
+      restartUploaded: async () => {
+        if (inputSource !== "video" || !videoRef.current || !inputVideoUrl) return false;
+        videoRef.current.pause();
+        level1MotionRef.current = new Level1MotionLayer();
+        predictionLedgerRef.current.reset();
+        temporalPhasePredictorRef.current?.reset();
+        trackingSessionEngineRef.current?.reset();
+        trackingSessionEngineRef.current?.start(0);
+        const durationSeconds = await resolveFiniteVideoDuration(videoRef.current);
+        if (!Number.isFinite(durationSeconds)) {
+          throw new Error("Unable to determine this video's duration.");
+        }
+        await seekVideo(videoRef.current, 0);
+        uploadedAnalysisRef.current = {
+          active: true,
+          sampleIntervalMs: 1000 / 30,
+          frameIndex: 0,
+          lastVideoTimestampMs: null,
+          seeking: false,
+          durationMs: durationSeconds * 1000
+        };
+        onInputStatus?.(`Analyzing video deterministically: ${inputVideoName || "uploaded sample"}`);
+        return true;
+      },
       discard: async () => {
         await stopPracticeVideoCapture();
         practiceRecorderChunksRef.current = [];
@@ -1169,6 +1255,10 @@ export default function SkeletonCanvas({
     };
   }, [
     analyzePracticeVideoCapture,
+    inputSource,
+    inputVideoName,
+    inputVideoUrl,
+    onInputStatus,
     onPracticeVideoController,
     startPracticeVideoCapture,
     stopPracticeVideoCapture
@@ -1282,7 +1372,8 @@ export default function SkeletonCanvas({
     }
 
     const engine = new TrackingSessionEngine(techniquePackage, {
-      mode: sessionConfig?.mode || (enableCoach ? "train" : "practice")
+      mode: sessionConfig?.mode || (enableCoach ? "train" : "practice"),
+      analysisEngine: temporalInferenceMode
     });
     if (trackingSessionActiveRef.current) {
       engine.start(performance.now());
@@ -1305,7 +1396,12 @@ export default function SkeletonCanvas({
         trackingSessionEngineRef.current = null;
       }
     };
-  }, [enableCoach, sessionConfig?.mode, sessionConfig?.technique_name]);
+  }, [
+    enableCoach,
+    sessionConfig?.mode,
+    sessionConfig?.technique_name,
+    temporalInferenceMode
+  ]);
 
   useEffect(() => {
     trackingSessionActiveRef.current = trackingSessionActive;
@@ -1411,8 +1507,10 @@ export default function SkeletonCanvas({
     displayMirroredRef.current = displayMirrored;
     skeletonLayersRef.current = skeletonLayers;
     performanceModeRef.current = performanceMode;
+    temporalInferenceModeRef.current = temporalInferenceMode;
     basePerformanceConfigRef.current = getStudioPerformanceConfig(performanceProfile, {
       onnxEnabled: Boolean(
+        ["model", "both"].includes(temporalInferenceMode) ||
         skeletonLayers?.onnx ||
         enableAwareness ||
         (onLandmarkFrame && !capturePoseOnly)
@@ -1465,7 +1563,8 @@ export default function SkeletonCanvas({
     performanceProfile,
     performanceMode,
     onLandmarkFrame,
-    capturePoseOnly
+    capturePoseOnly,
+    temporalInferenceMode
   ]);
 
   useEffect(() => {
@@ -1881,8 +1980,14 @@ export default function SkeletonCanvas({
         return;
       }
 
-      if (inputSource === "video" && videoRef.current.paused) {
+      const deterministicUpload =
+        inputSource === "video" && uploadedAnalysisRef.current.active;
+      if (inputSource === "video" && videoRef.current.paused && !deterministicUpload) {
         animationFrameId = requestAnimationFrame(detect);
+        return;
+      }
+
+      if (deterministicUpload && uploadedAnalysisRef.current.seeking) {
         return;
       }
 
@@ -1900,7 +2005,10 @@ export default function SkeletonCanvas({
         syncCanvasToVideo(canvasRef.current, videoRef.current);
       }
 
-      if (now - lastFrameTimeRef.current < 1000 / performanceConfigRef.current.poseFps) {
+      if (
+        !deterministicUpload
+        && now - lastFrameTimeRef.current < 1000 / performanceConfigRef.current.poseFps
+      ) {
         animationFrameId = requestAnimationFrame(detect);
         return;
       }
@@ -1908,6 +2016,11 @@ export default function SkeletonCanvas({
       lastFrameTimeRef.current = now;
       const performanceConfig = performanceConfigRef.current;
       const processingStartedAt = performance.now();
+      const videoTimestampMs = inputSource === "video"
+        ? Math.max(0, videoRef.current.currentTime * 1000)
+        : now;
+      const previousVideoTimestampMs = uploadedAnalysisRef.current.lastVideoTimestampMs;
+      const analysisTimestampMs = inputSource === "video" ? videoTimestampMs : now;
 
       try {
         let rawPoseLandmarks = null;
@@ -2061,7 +2174,7 @@ export default function SkeletonCanvas({
           onCalibrationStatusRef.current?.(calibrationFit);
         }
         const frame = createLandmarkFrame({
-          timestamp: now,
+          timestamp: analysisTimestampMs,
           rawPoseLandmarks,
           poseLandmarks,
           angleLandmarks,
@@ -2069,7 +2182,10 @@ export default function SkeletonCanvas({
           handednessList,
           faceLandmarks
         });
-        const baseLevel1State = level1MotionRef.current.update(frame.pose, now);
+        const baseLevel1State = level1MotionRef.current.update(
+          frame.pose,
+          analysisTimestampMs
+        );
         const auxiliaryScores = getHolisticScores(
           frame,
           shouldTrackHandsRef.current,
@@ -2084,7 +2200,10 @@ export default function SkeletonCanvas({
         };
         const temporalInferenceSource =
           techniquePackageRef.current?.getTemporalInferenceSource?.() || "auto";
-        const temporalOnnxAllowed = temporalInferenceSource !== "rules";
+        const requestedTemporalMode = temporalInferenceModeRef.current;
+        const temporalOnnxAllowed = requestedTemporalMode === "auto"
+          ? temporalInferenceSource !== "rules"
+          : requestedTemporalMode !== "rules";
         if (temporalOnnxAllowed && shouldLoadTemporalPredictor({
           enabled: performanceConfigRef.current.onnxEnabled,
           sessionActive: trackingSessionActiveRef.current,
@@ -2096,15 +2215,24 @@ export default function SkeletonCanvas({
         const learnedStatePrediction = temporalOnnxAllowed
           ? temporalPhasePredictorRef.current?.update({
               landmarks: frame.worldPose,
-              timestampMs: now
+              timestampMs: analysisTimestampMs
             }) || null
           : null;
         const ruleEngineShadowFrame = trackingSessionActiveRef.current
           ? trackingSessionEngineRef.current?.update(level1State, {
               learnedStatePrediction,
+              frameIndex: deterministicUpload
+                ? uploadedAnalysisRef.current.frameIndex
+                : null,
+              videoTimestampMs: inputSource === "video" ? videoTimestampMs : null,
+              processingTimestampMs: processingStartedAt,
+              deltaVideoMs: Number.isFinite(previousVideoTimestampMs)
+                ? videoTimestampMs - previousVideoTimestampMs
+                : 0,
               learnedModelExpected:
                 temporalOnnxAllowed &&
                 (
+                  requestedTemporalMode === "model" ||
                   temporalInferenceSource === "onnx" ||
                   trackingSessionEngineRef.current?.techniquePackage?.id === "jab"
                 )
@@ -2120,7 +2248,7 @@ export default function SkeletonCanvas({
         });
         predictionLedgerRef.current.addSequence({
           model: "level1",
-          originTimestampMs: now,
+          originTimestampMs: analysisTimestampMs,
           forecasts: level1State?.debug?.predictedFrames || [],
           confidence: level1State?.motion_context?.prediction_confidence || 0
         });
@@ -2153,7 +2281,7 @@ export default function SkeletonCanvas({
           confidence: level2State?.action_context?.prediction_confidence || 0
         });
         const predictionAggregate = predictionLedgerRef.current.resolve({
-          targetTimestampMs: now,
+          targetTimestampMs: analysisTimestampMs,
           observedLandmarks: level1State?.debug?.currentLandmarks || frame.pose,
           observedConfidence: level1State?.tracking?.confidence || 0
         });
@@ -2326,7 +2454,7 @@ export default function SkeletonCanvas({
         previousDisplayPoseRef.current = displayLandmarks;
 
         onLandmarkFrameRef.current?.({
-          timestamp: now,
+          timestamp: analysisTimestampMs,
           pose: displayLandmarks,
           observedPose: frame.rawPose,
           filteredPose: level1State?.debug?.currentLandmarks || frame.pose,
@@ -2429,7 +2557,27 @@ export default function SkeletonCanvas({
       } catch (error) {
         console.error("Studio tracking frame failed", error);
       } finally {
-        if (!isDisposed) {
+        if (!isDisposed && deterministicUpload) {
+          const upload = uploadedAnalysisRef.current;
+          upload.lastVideoTimestampMs = videoTimestampMs;
+          upload.frameIndex += 1;
+          const durationMs = upload.durationMs;
+          const nextTimestampMs = videoTimestampMs + upload.sampleIntervalMs;
+          if (!Number.isFinite(durationMs) || nextTimestampMs >= durationMs) {
+            upload.active = false;
+            onInputStatus?.(`Video finished: ${inputVideoName || "uploaded sample"}`);
+          } else {
+            upload.seeking = true;
+            const handleSeeked = () => {
+              upload.seeking = false;
+              if (!isDisposed && upload.active) {
+                animationFrameId = requestAnimationFrame(detect);
+              }
+            };
+            videoRef.current.addEventListener("seeked", handleSeeked, { once: true });
+            videoRef.current.currentTime = nextTimestampMs / 1000;
+          }
+        } else if (!isDisposed) {
           animationFrameId = requestAnimationFrame(detect);
         }
       }
@@ -2474,14 +2622,21 @@ export default function SkeletonCanvas({
       videoRef.current.muted = true;
       videoRef.current.playsInline = true;
       videoRef.current.onended = () => {
+        uploadedAnalysisRef.current.active = false;
         onInputStatus?.(`Video finished: ${inputVideoName || "uploaded sample"}`);
       };
       await waitForVideoMetadata(videoRef.current);
       if (isDisposed || !videoRef.current) return;
 
-      await videoRef.current.play();
+      const durationSeconds = await resolveFiniteVideoDuration(videoRef.current);
+      if (!Number.isFinite(durationSeconds)) {
+        throw new Error("Unable to determine uploaded video duration");
+      }
+
+      await seekVideo(videoRef.current, 0);
+      videoRef.current.pause();
       syncCanvasToVideo(canvasRef.current, videoRef.current);
-      onInputStatus?.(`Analyzing video: ${inputVideoName || "uploaded sample"}`);
+      onInputStatus?.(`Video ready: ${inputVideoName || "uploaded sample"} · start the set to analyze`);
       detect();
     };
 
@@ -2533,6 +2688,7 @@ export default function SkeletonCanvas({
 
     return () => {
       isDisposed = true;
+      uploadedAnalysisRef.current.active = false;
       cancelAnimationFrame(animationFrameId);
       window.clearTimeout(delayedDetectionTimerId);
       cameraStream?.getTracks().forEach((track) => track.stop());

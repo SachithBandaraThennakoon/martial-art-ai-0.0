@@ -30,6 +30,7 @@ import AccountSubscription from "./pages/AccountSubscription";
 const Training = lazy(() => import("./pages/Training"));
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const ManualTechniqueCatalogAdmin = lazy(() => import("./pages/ManualTechniqueCatalogAdmin"));
+const AdminVideoAnalysis = lazy(() => import("./pages/AdminVideoAnalysis"));
 
 function TrainingRoute() {
   const location = useLocation();
@@ -93,6 +94,7 @@ function AppRoutes() {
     location.pathname === "/training" || location.pathname === "/admin-training" || location.pathname === "/admin-manual-catalog";
   const isLiveStudioRoute = [
     "/admin-studio",
+    "/admin-video-analysis",
     "/training",
     "/admin-training",
     "/admin-manual-catalog",
@@ -165,6 +167,15 @@ function AppRoutes() {
           element={
             <ProtectedRoute requiredRole="admin">
               <Studio isAdminStudio />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/admin-video-analysis"
+          element={
+            <ProtectedRoute requiredRole="admin">
+              <AdminVideoAnalysis />
             </ProtectedRoute>
           }
         />

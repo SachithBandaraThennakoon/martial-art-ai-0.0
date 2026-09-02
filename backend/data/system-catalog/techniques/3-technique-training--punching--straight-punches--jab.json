@@ -1447,6 +1447,122 @@
       "measurements": []
     },
     "temporal_runtime": {
+      "analysis_config": {
+        "schema_version": "2.0",
+        "activity_profile": {
+          "type": "cyclic_repetition",
+          "detector": "outbound_peak_return"
+        },
+        "normalization": {
+          "coordinate_space": "body_normalized_v2",
+          "origin": "hip_center",
+          "scale": "shoulder_width_or_torso_length",
+          "orientation": "body_relative",
+          "velocity_timebase": "video_timestamp"
+        },
+        "motion_axis": {
+          "type": "body_relative",
+          "origin": "lead_shoulder",
+          "moving_landmark": "lead_wrist",
+          "method": "calibrated_guard_displacement"
+        },
+        "signals": [
+          "lead_elbow_angle",
+          "lead_elbow_angular_velocity",
+          "lead_wrist_punch_axis_position",
+          "lead_wrist_punch_axis_velocity",
+          "lead_wrist_guard_distance",
+          "rear_wrist_guard_distance",
+          "torso_lean",
+          "torso_rotation",
+          "motion_energy"
+        ],
+        "rep_detector": {
+          "type": "outbound_peak_return",
+          "ready": {
+            "feature": "lead_wrist_guard_distance",
+            "operator": "lte",
+            "value": 0.65,
+            "confirmation": {
+              "min_frames": 2,
+              "min_ms": 45
+            }
+          },
+          "start": {
+            "all": [
+              {
+                "feature": "lead_wrist_forward_velocity",
+                "operator": "gte",
+                "value": 0.16
+              },
+              {
+                "feature": "lead_elbow_angular_velocity",
+                "operator": "gte",
+                "value": 20
+              }
+            ],
+            "confirmation": {
+              "min_frames": 2,
+              "min_ms": 45
+            }
+          },
+          "peak": {
+            "type": "direction_reversal",
+            "signal": "lead_wrist_forward_velocity",
+            "enter_velocity": 0.08,
+            "exit_velocity": -0.03,
+            "confirmation": {
+              "min_frames": 1,
+              "min_ms": 0
+            }
+          },
+          "return": {
+            "feature": "lead_wrist_guard_distance",
+            "operator": "lte",
+            "value": 0.65,
+            "confirmation": {
+              "min_frames": 2,
+              "min_ms": 45
+            }
+          },
+          "minimum_rep_ms": 250,
+          "maximum_rep_ms": 2400,
+          "minimum_inter_rep_ms": 150
+        },
+        "tracking_gap": {
+          "maximum_ms": 120,
+          "strategy": "hold"
+        },
+        "phase_segmentation": {
+          "state_mapping": {
+            "PREPARATION": "GUARD",
+            "EXTENSION": "EXTENSION",
+            "PEAK": "FULL_EXTENSION",
+            "RETRACTION": "RETRACTION",
+            "RECOVERY": "RECOVERY"
+          }
+        },
+        "quality_scoring": {
+          "domains": {
+            "technique": 0.4,
+            "defense": 0.2,
+            "balance": 0.15,
+            "recovery": 0.15,
+            "safety": 0.1
+          },
+          "metrics": [
+            {
+              "feature": "peak_lead_elbow_angle",
+              "phase": "PEAK",
+              "target": 170,
+              "preferred_range": [155, 177],
+              "scoring": { "type": "target_range_falloff" },
+              "weight": 3
+            }
+          ]
+        },
+        "learned_model_mode": "shadow"
+      },
       "manifest": {
         "schema_version": "1.0",
         "id": "jab",

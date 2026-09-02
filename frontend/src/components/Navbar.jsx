@@ -17,7 +17,7 @@ export default function Navbar() {
       ? "navbar__link active"
       : "navbar__link";
   const adminNavClass = () =>
-    ["/admin-studio", "/admin-training", "/admin-temporal-data"].includes(location.pathname)
+    ["/admin-studio", "/admin-training", "/admin-video-analysis", "/admin-temporal-data"].includes(location.pathname)
       ? "navbar__link active"
       : "navbar__link";
   const dashboardNavClass = () =>
@@ -64,6 +64,7 @@ export default function Navbar() {
               {userRole === "admin" ? (
                 <>
                   <NavLink className={navClass} onClick={closeMenu} to="/admin-studio">Admin Studio</NavLink>
+                  <NavLink className={navClass} onClick={closeMenu} to="/admin-video-analysis">Video Analysis</NavLink>
                   <NavLink className={navClass} onClick={closeMenu} to="/admin-training?mode=analysis">Admin Training</NavLink>
                   <NavLink className={navClass} onClick={closeMenu} to="/model-test">Model Test</NavLink>
                   <NavLink className={navClass} onClick={closeMenu} to="/admin-temporal-data">Temporal Data Lab</NavLink>

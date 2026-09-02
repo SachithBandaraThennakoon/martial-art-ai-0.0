@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 const percent = (value) =>
   Number.isFinite(Number(value)) ? `${Math.round(Number(value) * 100)}%` : "--";
@@ -53,8 +53,13 @@ export default function AdminPracticeDiagnostics({
   const frame = frozen ? snapshot : ruleFrame || snapshot;
   const learned = frame?.learned_state_prediction;
   const inferenceSource = frame?.temporal_inference_source || "unknown";
-  const learnedDisabled =
-    inferenceSource === "rules" || frame?.learned_model_mode === "disabled_by_technique";
+  const learnedDisabled = !learned && (
+    frame?.analysis_engine === "rules" ||
+    frame?.learned_model_mode === "disabled_by_technique"
+  );
+  const ruleScores = frame?.rule_state_scores || (
+    inferenceSource === "rules" ? frame?.state_scores : frame?.shadow_state_scores
+  ) || {};
   const action = level2State?.action_context || {};
   const session = level3State?.session_context || {};
   const situation = situationAwarenessState?.situation_context || {};
@@ -64,15 +69,13 @@ export default function AdminPracticeDiagnostics({
   const activeConditions = activeRuleEvidence?.evaluation?.evidence || [];
   const waitingForInitialState =
     frame?.session_state === "READY" && !frame?.step;
-  const comparison = useMemo(() => {
-    const ruleTop = Object.entries(frame?.state_scores || {})
-      .sort((left, right) => right[1] - left[1])[0];
-    return {
-      ruleState: ruleTop?.[0] || null,
-      ruleConfidence: ruleTop?.[1],
-      agree: Boolean(ruleTop?.[0] && learned?.state === ruleTop[0])
-    };
-  }, [frame, learned?.state]);
+  const ruleTop = Object.entries(ruleScores)
+    .sort((left, right) => right[1] - left[1])[0];
+  const comparison = {
+    ruleState: ruleTop?.[0] || null,
+    ruleConfidence: ruleTop?.[1],
+    agree: Boolean(ruleTop?.[0] && learned?.state === ruleTop[0])
+  };
 
   return (
     <section className="admin-live-diagnostics">
@@ -129,7 +132,7 @@ export default function AdminPracticeDiagnostics({
           {showScores && (
             <>
               <div className="admin-live-diagnostics__columns">
-                <div><h4>Rule evidence</h4><ScoreRows scores={frame?.state_scores} /></div>
+                <div><h4>Rule evidence</h4><ScoreRows scores={ruleScores} /></div>
                 {showLearned && <div><h4>Learned probabilities</h4><ScoreRows scores={learned?.probabilities} /></div>}
               </div>
               {activeConditions.length ? (

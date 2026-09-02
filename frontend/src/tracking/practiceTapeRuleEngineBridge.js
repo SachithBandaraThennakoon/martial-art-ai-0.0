@@ -118,7 +118,10 @@ export function reanalyzePracticeTapeWithRuleEngine(
 ) {
   if (!techniquePackage || !(tapeFrames || []).length) return null;
 
-  const engine = new TrackingSessionEngine(techniquePackage, { mode });
+  const engine = new TrackingSessionEngine(techniquePackage, {
+    mode,
+    analysisEngine: "rules"
+  });
   let previousLandmarks = null;
   let previousTimestampMs = null;
 

@@ -4,6 +4,34 @@ from services.practice_analytics import extract_practice_analytics
 
 
 class PracticeAnalyticsTests(unittest.TestCase):
+    def test_v2_rule_result_is_authoritative_for_saved_analysis(self):
+        payload = extract_practice_analytics({
+            "targetReps": 5,
+            "canonicalCompletedReps": 0,
+            "correctedSummary": {"completed_reps": 0},
+            "ruleEngineAnalysis": {
+                "summary": {
+                    "analysis_schema_version": "2.0",
+                    "detected_attempts": 5,
+                    "completed_motions": 4,
+                    "completed_repetitions": 4,
+                    "aborted_repetitions": 1,
+                    "technique_quality": 0.596,
+                    "detection_confidence": 0.809,
+                    "tracking_quality": 0.9404,
+                    "consistency": 0.75,
+                }
+            },
+        })
+
+        self.assertEqual(payload["completion_source"], "rule_engine_v2")
+        self.assertEqual(payload["completed_repetitions"], 5)
+        self.assertEqual(payload["detected_attempts"], 5)
+        self.assertEqual(payload["completed_motions"], 4)
+        self.assertEqual(payload["aborted_repetitions"], 1)
+        self.assertEqual(payload["tracking_quality_percentage"], 94.0)
+        self.assertEqual(payload["technique_quality"], 0.596)
+
     def test_extracts_compact_post_session_summary(self):
         payload = extract_practice_analytics({
             "captureDurationMs": 8400,

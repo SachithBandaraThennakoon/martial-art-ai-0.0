@@ -122,6 +122,7 @@ export function SessionAccuracyChart({
 
 export function SessionMomentFacts({
   accuracy,
+  accuracyLabel = "Accuracy estimate",
   phase,
   rep,
   step,
@@ -134,7 +135,7 @@ export function SessionMomentFacts({
       <span><small>Rep</small><strong>{rep}</strong></span>
       <span><small>Step</small><strong>{step}</strong></span>
       <span><small>Phase</small><strong>{phase}</strong></span>
-      <span><small>Accuracy estimate</small><strong>{accuracy}</strong></span>
+      <span><small>{accuracyLabel}</small><strong>{accuracy}</strong></span>
       <span><small>Tracking</small><strong>{tracking}</strong></span>
     </>
   );

@@ -9,7 +9,11 @@ from database import get_db
 from models.technique import Technique
 from models.training_memory import PracticeRep, PracticeSession, TrainingFeedbackEvent, TrainingSession
 from models.user import User
-from services.practice_analytics import load_practice_analytics
+from services.practice_analytics import (
+    canonical_practice_accuracy,
+    canonical_practice_rep_count,
+    load_practice_analytics,
+)
 
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
@@ -169,8 +173,12 @@ def dashboard(
         item["accuracy_total"] += accuracy
 
     for item in practice:
-        accuracy = item.average_accuracy or 0
-        rep_count, clean_count = item.completed_reps or 0, item.clean_reps or 0
+        analytics = practice_analytics.get(item.id) or {}
+        accuracy = canonical_practice_accuracy(item, analytics)
+        rep_count, clean_count = (
+            canonical_practice_rep_count(item, analytics),
+            min(item.clean_reps or 0, canonical_practice_rep_count(item, analytics)),
+        )
         record_day(item.started_at, accuracy, rep_count, clean_count)
         group = technique_bucket(item.technique_name, item.technique_id)
         group["sessions"] += 1
@@ -179,7 +187,6 @@ def dashboard(
         group["accuracy_total"] += accuracy
         group["consistency_total"] += item.consistency_score or 0
         group["consistency_samples"] += 1
-        analytics = practice_analytics.get(item.id) or {}
         tracking_quality = analytics.get("tracking_quality_percentage")
         response_time = analytics.get("average_response_time_ms")
         if tracking_quality is not None:
@@ -191,10 +198,15 @@ def dashboard(
         group["aborted_reps"] += int(analytics.get("aborted_repetitions") or 0)
         info = metadata_by_id.get(item.technique_id) or metadata.get((item.technique_name or "").lower(), {})
         capture_duration = analytics.get("capture_duration_ms")
+        canonical_status = (
+            "completed"
+            if item.target_reps and rep_count >= item.target_reps
+            else item.status
+        )
         sessions.append({
             "id": f"practice-{item.id}", "mode": "practice", "technique_name": item.technique_name,
             "category": info.get("category", "Uncategorized"), "subcategory": info.get("subcategory", "General"),
-            "difficulty": info.get("difficulty", "Unspecified"), "status": item.status,
+            "difficulty": info.get("difficulty", "Unspecified"), "status": canonical_status,
             "accuracy": round(accuracy, 1), "reps": rep_count, "target_reps": item.target_reps or 0,
             "clean_reps": clean_count, "consistency": round(item.consistency_score or 0, 1),
             "duration_seconds": round(
@@ -208,6 +220,7 @@ def dashboard(
             "aborted_reps": int(analytics.get("aborted_repetitions") or 0),
             "corrections_applied": int(analytics.get("corrections_applied") or 0),
             "form_errors": analytics.get("common_form_errors") or [],
+            "analytics": analytics or None,
             "started_at": iso(item.started_at), "ended_at": iso(item.ended_at),
         })
 
@@ -246,9 +259,21 @@ def dashboard(
     technique_items.sort(key=lambda item: (item["average_accuracy"], item["sessions"]), reverse=True)
     sessions.sort(key=lambda item: item["started_at"] or "", reverse=True)
 
-    accuracies = [item.average_accuracy or 0 for item in practice] + [item.final_accuracy or 0 for item in training]
-    total_reps = sum(item.completed_reps or 0 for item in practice)
-    clean_reps = sum(item.clean_reps or 0 for item in practice)
+    accuracies = [
+        canonical_practice_accuracy(item, practice_analytics.get(item.id))
+        for item in practice
+    ] + [item.final_accuracy or 0 for item in training]
+    total_reps = sum(
+        canonical_practice_rep_count(item, practice_analytics.get(item.id))
+        for item in practice
+    )
+    clean_reps = sum(
+        min(
+            item.clean_reps or 0,
+            canonical_practice_rep_count(item, practice_analytics.get(item.id)),
+        )
+        for item in practice
+    )
     duration_seconds = sum(item["duration_seconds"] for item in sessions)
     completed = sum(1 for item in sessions if item["status"] == "completed")
     tracking_values = [

@@ -54,6 +54,8 @@ from routers import database_sync as database_sync_router
 # Services
 from services.angle_service import compare_angles
 from services.practice_analytics import (
+    canonical_practice_accuracy,
+    canonical_practice_rep_count,
     load_practice_analytics,
     upsert_practice_analytics,
 )
@@ -1040,6 +1042,25 @@ def get_practice_analysis(
 
     session_ids = [session.id for session in sessions]
     session_analytics = load_practice_analytics(db, session_ids)
+    canonical_rep_counts = [
+        canonical_practice_rep_count(session, session_analytics.get(session.id))
+        for session in sessions
+    ]
+    canonical_accuracies = [
+        canonical_practice_accuracy(session, session_analytics.get(session.id))
+        for session in sessions
+    ]
+    total_reps = sum(canonical_rep_counts)
+    clean_reps = sum(
+        min(session.clean_reps or 0, canonical_rep_counts[index])
+        for index, session in enumerate(sessions)
+    )
+    best_accuracy = max(canonical_accuracies or [0])
+    average_accuracy = (
+        sum(canonical_accuracies) / total_sessions if total_sessions else 0
+    )
+    completion_rate = (total_reps / target_reps * 100) if target_reps else 0
+    clean_rate = (clean_reps / total_reps * 100) if total_reps else 0
     session_videos = {
         video.practice_session_id: video
         for video in db.query(PracticeSessionVideo).filter(
@@ -1103,8 +1124,15 @@ def get_practice_analysis(
         {
             "session_id": session.id,
             "technique_name": session.technique_name,
-            "average_accuracy": round(session.average_accuracy or 0, 1),
-            "completed_reps": session.completed_reps or 0,
+            "average_accuracy": round(
+                canonical_practice_accuracy(
+                    session, session_analytics.get(session.id)
+                ),
+                1,
+            ),
+            "completed_reps": canonical_practice_rep_count(
+                session, session_analytics.get(session.id)
+            ),
             "target_reps": session.target_reps or 0,
         }
         for session in recent_sessions
@@ -1120,9 +1148,9 @@ def get_practice_analysis(
         elif latest_errors:
             readable_error = latest_errors[0]["error_id"].replace("_", " ")
             recommendation = f"Repeat the set slowly and focus on {readable_error}."
-        elif (latest.average_accuracy or 0) >= 85 and latest.completed_reps >= latest.target_reps:
+        elif canonical_practice_accuracy(latest, latest_analytics) >= 85 and canonical_practice_rep_count(latest, latest_analytics) >= latest.target_reps:
             recommendation = "Strong set. Return to Train or raise the count."
-        elif latest.completed_reps < latest.target_reps:
+        elif canonical_practice_rep_count(latest, latest_analytics) < latest.target_reps:
             recommendation = "Finish the target count before increasing reps."
         else:
             recommendation = "Repeat the same count slowly for cleaner reps."
@@ -1780,6 +1808,8 @@ def _practice_consistency_score(reps):
 
 
 def _practice_session_payload(session, analytics=None, video=None):
+    completed_reps = canonical_practice_rep_count(session, analytics)
+    average_accuracy = canonical_practice_accuracy(session, analytics)
     payload = {
         "id": session.id,
         "technique_id": session.technique_id,
@@ -1787,13 +1817,17 @@ def _practice_session_payload(session, analytics=None, video=None):
         "step_key": session.step_key,
         "step_name": session.step_name,
         "target_reps": session.target_reps,
-        "completed_reps": session.completed_reps,
+        "completed_reps": completed_reps,
         "clean_reps": session.clean_reps,
-        "average_accuracy": round(session.average_accuracy or 0, 1),
+        "average_accuracy": round(average_accuracy, 1),
         "best_accuracy": round(session.best_accuracy or 0, 1),
         "average_rep_seconds": round(session.average_rep_seconds or 0, 2),
         "consistency_score": round(session.consistency_score or 0, 1),
-        "status": session.status,
+        "status": (
+            "completed"
+            if session.target_reps and completed_reps >= session.target_reps
+            else session.status
+        ),
         "started_at": session.started_at.isoformat() if session.started_at else None,
         "ended_at": session.ended_at.isoformat() if session.ended_at else None,
     }

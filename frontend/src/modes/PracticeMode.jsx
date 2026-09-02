@@ -5,6 +5,7 @@ import DataLayersPanel from "../components/DataLayersPanel";
 import DiagnosticTraceControls from "../components/DiagnosticTraceControls";
 import Level1DebugPanel from "../components/Level1DebugPanel";
 import Level2DebugPanel from "../components/Level2DebugPanel";
+import SessionAnalysisPanel from "../components/SessionAnalysisPanel";
 import SkeletonCanvas from "../components/SkeletonCanvas";
 import {
   SessionAccuracyChart,
@@ -909,7 +910,10 @@ export default function PracticeMode({
   inputVideoUrl,
   inputVideoName,
   onInputStatus,
-  onPredictionStatus
+  onPredictionStatus,
+  analysisEngine = "auto",
+  autoStartVideoAnalysis = false,
+  initialTargetReps = 5
 }) {
   const currentTechnique = useMemo(
     () =>
@@ -954,7 +958,11 @@ export default function PracticeMode({
     });
     return [...parts.values()];
   }, [steps]);
-  const [targetReps, setTargetReps] = useState(5);
+  const [targetReps, setTargetReps] = useState(
+    () => [3, 5, 10].includes(Number(initialTargetReps))
+      ? Number(initialTargetReps)
+      : 5
+  );
   const [countGapMs, setCountGapMs] = useState(2000);
   const [session, setSession] = useState(null);
   const [repCount, setRepCount] = useState(0);
@@ -1007,6 +1015,8 @@ export default function PracticeMode({
   const [diagnosticTraceCount, setDiagnosticTraceCount] = useState(0);
   const [videoVerificationStatus, setVideoVerificationStatus] = useState("idle");
   const [videoPersistenceStatus, setVideoPersistenceStatus] = useState("idle");
+  const [uploadedVideoReady, setUploadedVideoReady] = useState(false);
+  const quickVideoStartedRef = useRef(false);
   const ruleEngineResultRef = useRef(null);
   const ruleEngineWaitersRef = useRef(new Set());
   const handleRuleEngineSessionComplete = useCallback((summary) => {
@@ -1154,6 +1164,12 @@ export default function PracticeMode({
   const handlePracticeVideoController = useCallback((controller) => {
     practiceVideoControllerRef.current = controller;
   }, []);
+  const handleInputStatus = useCallback((status) => {
+    onInputStatus?.(status);
+    setUploadedVideoReady(
+      inputSource === "video" && String(status || "").startsWith("Video ready:")
+    );
+  }, [inputSource, onInputStatus]);
   const lastDiagnosticRepRef = useRef(0);
   const lastDiagnosticSessionStatusRef = useRef(null);
   const diagnosticRecorderRef = useRef(null);
@@ -1176,7 +1192,18 @@ export default function PracticeMode({
     targetReps;
   const popupRepTape = analysisTapeMetadata?.repTape || repTape;
   const fullTapeDurationMs = fullTapeFrames.length
-    ? (fullTapeFrames.length / 30) * 1000
+    ? Math.max(
+        0,
+        Number(
+          fullTapeFrames.at(-1)?.sourceTimestampMs ??
+          fullTapeFrames.at(-1)?.elapsedMs ??
+          0
+        ) - Number(
+          fullTapeFrames[0]?.sourceTimestampMs ??
+          fullTapeFrames[0]?.elapsedMs ??
+          0
+        )
+      )
     : 0;
   const scoredFullTapeFrames = fullTapeFrames.filter(
     (frame) => frame.scorable !== false && Number.isFinite(frame.accuracy)
@@ -1189,6 +1216,23 @@ export default function PracticeMode({
     : 0;
   const authoritativeSession = analysisTapeMetadata?.authoritativeSession || null;
   const correctedRuleSummary = analysisTapeMetadata?.ruleEngineAnalysis?.summary || null;
+  const ruleEngineSession = correctedRuleSummary
+    ? {
+        ...(authoritativeSession || {}),
+        technique_name:
+          authoritativeSession?.technique_name ||
+          analysisTapeMetadata?.techniqueName ||
+          currentTechnique?.name ||
+          "Practice",
+        target_reps: tapeTargetReps,
+        status:
+          Number(correctedRuleSummary.detected_attempts) >= Number(tapeTargetReps)
+            ? "completed"
+            : "incomplete",
+        mode: "practice",
+        analytics: correctedRuleSummary
+      }
+    : null;
   const canonicalSessionAnalysis = useMemo(
     () => buildPracticeSessionAnalysis(fullTapeFrames, {
       steps: tapeAnalysisSteps,
@@ -2407,6 +2451,7 @@ export default function PracticeMode({
           techniqueName: currentTechnique?.name || "Practice",
           biomechanicsSchema: "observed-filtered-measurement-aggregate-v2",
           postSessionClassification: true,
+          analysisEngine,
           analysisAuthority: videoReplayMetadata
             ? "recorded-video"
             : "live-pose-tape",
@@ -2539,6 +2584,7 @@ export default function PracticeMode({
     }
   }, [
     appendConversation,
+    analysisEngine,
     clearCountBeatTimers,
     completePracticeSession,
     countGapMs,
@@ -2808,6 +2854,9 @@ export default function PracticeMode({
     );
     practiceVideoCaptureOffsetMsRef.current =
       classificationArmedAtElapsedMsRef.current;
+    if (inputSource === "video") {
+      await practiceVideoControllerRef.current?.restartUploaded?.();
+    }
     if (
       inputSource === "live" &&
       currentTechnique?.name?.trim().toLowerCase() === "jab"
@@ -2845,6 +2894,25 @@ export default function PracticeMode({
   const startPractice = useCallback(() => {
     startPracticeForStep(0);
   }, [startPracticeForStep]);
+
+  useEffect(() => {
+    if (
+      !autoStartVideoAnalysis ||
+      !uploadedVideoReady ||
+      quickVideoStartedRef.current ||
+      !inputVideoUrl
+    ) {
+      return undefined;
+    }
+    quickVideoStartedRef.current = true;
+    const timerId = window.setTimeout(startPractice, 250);
+    return () => window.clearTimeout(timerId);
+  }, [
+    autoStartVideoAnalysis,
+    inputVideoUrl,
+    startPractice,
+    uploadedVideoReady
+  ]);
 
   const resetPractice = useCallback(() => {
     void practiceVideoControllerRef.current?.discard?.();
@@ -3375,8 +3443,9 @@ export default function PracticeMode({
           inputSource={inputSource}
           inputVideoUrl={inputVideoUrl}
           inputVideoName={inputVideoName}
-          onInputStatus={onInputStatus}
+          onInputStatus={handleInputStatus}
           onPredictionStatus={onPredictionStatus}
+          temporalInferenceMode={analysisEngine}
           displayMirrored={displayMirrored}
           skeletonLayers={practiceSkeletonLayers}
           bodyCalibration={bodyCalibration?.profile}
@@ -3902,7 +3971,11 @@ export default function PracticeMode({
         >
           <div className="practice-tape-popup__header">
             <div>
-              <p className="eyebrow">Full session analysis</p>
+              <p className="eyebrow">
+                Full session analysis · {analysisEngine === "both"
+                  ? "Rules + model"
+                  : analysisEngine === "model" ? "Model" : "Rules"}
+              </p>
               <strong>
                 Reconciled result {displayedCompletedReps}/{tapeTargetReps}
                 {hasStrictRuleAnalysis && strictReplayReliable && isAdminStudio
@@ -4001,6 +4074,13 @@ export default function PracticeMode({
               </div>
             ) : null}
             </div>
+          ) : null}
+
+          {ruleEngineSession ? (
+            <SessionAnalysisPanel
+              eyebrow="Rule-based session analysis"
+              session={ruleEngineSession}
+            />
           ) : null}
 
           <SessionAccuracyChart
@@ -4308,7 +4388,7 @@ export default function PracticeMode({
               }}
               type="button"
             >
-              {isFullTapePlaying ? "Pause" : "Play 30 FPS"}
+              {isFullTapePlaying ? "Pause" : "Play timeline"}
             </button>
             <input
               aria-label="Scrub full movement tape"
