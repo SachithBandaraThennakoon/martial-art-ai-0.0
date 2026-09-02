@@ -2,6 +2,30 @@ import { scorePracticeAngles } from "./practiceAngleScoring.js";
 
 const MOTION_JOINTS = [11, 12, 13, 14, 15, 16, 23, 24];
 
+export function resolvePracticeVideoDurationMs({
+  mediaDurationSeconds,
+  captureDurationMs,
+  maximumDurationMs = 300_000
+} = {}) {
+  const maximum = Number(maximumDurationMs);
+  const safeMaximum = Number.isFinite(maximum) && maximum > 0
+    ? maximum
+    : 300_000;
+  const captured = Number(captureDurationMs);
+
+  // MediaRecorder WebM blobs can report Infinity until their duration metadata
+  // is repaired. Wall-clock capture time is authoritative for recordings made
+  // by this component and prevents Infinity from being clamped to five minutes.
+  if (Number.isFinite(captured) && captured > 0) {
+    return Math.min(captured, safeMaximum);
+  }
+
+  const media = Number(mediaDurationSeconds) * 1000;
+  return Number.isFinite(media) && media > 0
+    ? Math.min(media, safeMaximum)
+    : 0;
+}
+
 function poseMotion(previous = [], current = []) {
   const distances = MOTION_JOINTS.map((index) => {
     const from = previous[index];

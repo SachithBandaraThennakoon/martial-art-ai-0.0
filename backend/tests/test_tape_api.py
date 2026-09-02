@@ -74,6 +74,13 @@ class TapeAPITests(unittest.TestCase):
             "frameCount": 42,
             "retained": True,
         }
+        document["metadata"]["videoReplayDiagnostics"] = {
+            "status": "verified",
+            "reason": None,
+            "frameCount": 42,
+            "effectiveFps": 15,
+            "durationMs": 2800,
+        }
         raw = json.dumps(document, separators=(",", ":"))
         digest = hashlib.sha256(raw.encode()).hexdigest()
         key = "tapeuploadidempotency000000000001"
@@ -157,6 +164,43 @@ class TapeAPITests(unittest.TestCase):
         self.assertEqual(len(reps), 1)
         self.assertEqual(reps[0].accuracy, 93)
         self.assertEqual(reps[0].duration_ms, 1400)
+
+    def test_sparse_corrected_summary_cannot_lower_persisted_rep_count(self):
+        path = f"/practice/sessions/{self.session.id}/reps"
+        for rep_number, accuracy in ((1, 90), (2, 70), (3, 50)):
+            response = self.client.post(
+                path,
+                headers=self.headers(),
+                json={
+                    "rep_number": rep_number,
+                    "accuracy": accuracy,
+                    "duration_ms": 1500,
+                },
+            )
+            self.assertEqual(response.status_code, 200)
+
+        completed = self.client.patch(
+            f"/practice/sessions/{self.session.id}/complete",
+            headers=self.headers(),
+            json={
+                "status": "cancelled",
+                "corrected_summary": {
+                    "completed_reps": 1,
+                    "clean_reps": 1,
+                    "average_accuracy": 98,
+                    "best_accuracy": 98,
+                    "average_rep_seconds": 2.4,
+                    "consistency_score": 100,
+                },
+            },
+        )
+
+        self.assertEqual(completed.status_code, 200)
+        payload = completed.json()
+        self.assertEqual(payload["completed_reps"], 3)
+        self.assertEqual(payload["status"], "completed")
+        self.assertEqual(payload["average_accuracy"], 70)
+        self.assertEqual(payload["best_accuracy"], 90)
 
     def test_raw_video_store_metadata_read_and_idempotent_retry(self):
         raw_video = b"\x1aE\xdf\xa3mock-webm-video-payload"

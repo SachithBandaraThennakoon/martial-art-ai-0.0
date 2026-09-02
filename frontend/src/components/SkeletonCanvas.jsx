@@ -167,6 +167,7 @@ import {
   TrackingSessionEngine
 } from "../tracking/trackingSessionEngine";
 import { deriveForecastAwareness } from "../temporal/forecastAwareness";
+import { resolvePracticeVideoDurationMs } from "../utils/practiceVideoReplay";
 
 const BODY_PART_MAP = {
   elbow_right: [12, 14, 16],
@@ -827,6 +828,7 @@ export default function SkeletonCanvas({
   const practiceRecorderRef = useRef(null);
   const practiceRecorderChunksRef = useRef([]);
   const practiceRecorderStartedAtRef = useRef(null);
+  const practiceRecorderDurationMsRef = useRef(0);
   const practiceRecorderTypeRef = useRef("video/webm");
   const practiceVideoFrameRateRef = useRef(null);
   const replayActiveRef = useRef(false);
@@ -926,6 +928,10 @@ export default function SkeletonCanvas({
   const stopPracticeVideoCapture = useCallback(() => {
     const recorder = practiceRecorderRef.current;
     if (!recorder) return Promise.resolve(null);
+    const captureStartedAt = Number(practiceRecorderStartedAtRef.current);
+    practiceRecorderDurationMsRef.current = Number.isFinite(captureStartedAt)
+      ? Math.max(0, performance.now() - captureStartedAt)
+      : 0;
     if (recorder.state === "inactive") {
       practiceRecorderRef.current = null;
       const chunks = practiceRecorderChunksRef.current;
@@ -984,6 +990,7 @@ export default function SkeletonCanvas({
       videoTracks[0]?.getSettings?.().frameRate
     ) || null;
     practiceRecorderStartedAtRef.current = performance.now();
+    practiceRecorderDurationMsRef.current = 0;
     recorder.addEventListener("dataavailable", (event) => {
       if (event.data?.size) practiceRecorderChunksRef.current.push(event.data);
     });
@@ -1007,11 +1014,12 @@ export default function SkeletonCanvas({
     replayActiveRef.current = true;
     try {
       await waitForVideoEvent(replayVideo, "loadeddata");
-      const durationMs = Math.min(
-        Number(replayVideo.duration) * 1000,
+      const durationMs = resolvePracticeVideoDurationMs({
+        mediaDurationSeconds: replayVideo.duration,
+        captureDurationMs: practiceRecorderDurationMsRef.current,
         maximumDurationMs
-      );
-      if (!Number.isFinite(durationMs) || durationMs <= 0) return null;
+      });
+      if (durationMs <= 0) return null;
       const intervalMs = 1000 / Math.max(8, Math.min(30, sampleFps));
       const replayVision = visionRef.current || await FilesetResolver.forVisionTasks(
         "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.32/wasm"
@@ -1060,7 +1068,10 @@ export default function SkeletonCanvas({
         }
       };
 
-      replayVideo.playbackRate = 2;
+      // Keep replay at real time. Running pose inference at 2x can skip enough
+      // decoded frames on ordinary CPUs to make a healthy recording fail the
+      // minimum effective-FPS verification check.
+      replayVideo.playbackRate = 1;
       await new Promise((resolve, reject) => {
         let settled = false;
         let callbackId = null;

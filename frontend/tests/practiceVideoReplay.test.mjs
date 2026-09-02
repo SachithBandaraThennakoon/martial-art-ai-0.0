@@ -3,7 +3,8 @@ import test from "node:test";
 
 import {
   buildPracticeVideoReplayFrames,
-  isUsablePracticeVideoReplay
+  isUsablePracticeVideoReplay,
+  resolvePracticeVideoDurationMs
 } from "../src/utils/practiceVideoReplay.js";
 
 const pose = (wristX) => Array.from({ length: 33 }, (_, index) => ({
@@ -48,4 +49,31 @@ test("video replay requires enough unique analyzed frames", () => {
   assert.equal(good.usable, true);
   assert.equal(good.effectiveFps, 15);
   assert.equal(sparse.usable, false);
+});
+
+test("WebM Infinity duration falls back to measured capture time", () => {
+  const durationMs = resolvePracticeVideoDurationMs({
+    mediaDurationSeconds: Infinity,
+    captureDurationMs: 14_576,
+    maximumDurationMs: 300_000
+  });
+
+  assert.equal(durationMs, 14_576);
+  assert.equal(
+    isUsablePracticeVideoReplay({
+      durationMs,
+      frames: Array.from({ length: 218 }, () => ({}))
+    }).usable,
+    true
+  );
+});
+
+test("finite media duration is used when capture timing is unavailable", () => {
+  assert.equal(
+    resolvePracticeVideoDurationMs({
+      mediaDurationSeconds: 12.25,
+      captureDurationMs: 0
+    }),
+    12_250
+  );
 });

@@ -47,8 +47,11 @@ export default function Studio({ isAdminStudio = false }) {
 
   const handleDatabaseSync = useCallback(async (direction) => {
     const directionLabel = direction === "cloud_to_local" ? "cloud to local" : "local to cloud";
+    const isCloudPull = direction === "cloud_to_local";
     const confirmation = window.prompt(
-      `This replaces the destination database's application data (${directionLabel}). Type SYNC to continue.`
+      isCloudPull
+        ? "This updates local rows from the cloud and adds new cloud rows. Local-only rows are kept. Type SYNC to continue."
+        : `This replaces the destination database's application data (${directionLabel}). Type SYNC to continue.`
     );
     if (confirmation !== "SYNC") return;
 

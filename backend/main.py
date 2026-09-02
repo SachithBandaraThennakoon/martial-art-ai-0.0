@@ -469,27 +469,35 @@ def complete_practice_session(
     _refresh_practice_session_summary(db, session)
     if request.corrected_summary:
         summary = request.corrected_summary
-        session.completed_reps = max(
+        persisted_completed_reps = session.completed_reps or 0
+        corrected_completed_reps = max(
             0,
             min(summary.completed_reps, session.target_reps or 50)
         )
-        session.clean_reps = max(
-            0,
-            min(summary.clean_reps, session.completed_reps)
+        session.completed_reps = max(
+            persisted_completed_reps,
+            corrected_completed_reps,
         )
-        session.average_accuracy = max(
-            0,
-            min(summary.average_accuracy, 100)
-        )
-        session.best_accuracy = max(0, min(summary.best_accuracy, 100))
-        session.average_rep_seconds = max(
-            0,
-            min(summary.average_rep_seconds, 120)
-        )
-        session.consistency_score = max(
-            0,
-            min(summary.consistency_score, 100)
-        )
+        # A sparse post-session pass must not erase stronger rep records that
+        # were already persisted by live movement completion events.
+        if corrected_completed_reps >= persisted_completed_reps:
+            session.clean_reps = max(
+                0,
+                min(summary.clean_reps, session.completed_reps)
+            )
+            session.average_accuracy = max(
+                0,
+                min(summary.average_accuracy, 100)
+            )
+            session.best_accuracy = max(0, min(summary.best_accuracy, 100))
+            session.average_rep_seconds = max(
+                0,
+                min(summary.average_rep_seconds, 120)
+            )
+            session.consistency_score = max(
+                0,
+                min(summary.consistency_score, 100)
+            )
         session.status = (
             "completed"
             if session.completed_reps >= (session.target_reps or 0)

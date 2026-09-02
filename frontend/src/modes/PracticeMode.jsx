@@ -2285,6 +2285,7 @@ export default function PracticeMode({
         const tapeDurationMs = Math.max(0, Math.round(performance.now() - setStart));
         let analysisSourceFrames = recordedFramesRef.current;
         let videoReplayMetadata = null;
+        let videoReplayDiagnostics = null;
         let rawVideoBlob = null;
         let recordedVideoDurationMs = 0;
         const videoController = practiceVideoControllerRef.current;
@@ -2302,6 +2303,15 @@ export default function PracticeMode({
               : null;
             recordedVideoDurationMs = Number(replay?.durationMs) || 0;
             const replayQuality = isUsablePracticeVideoReplay(replay);
+            videoReplayDiagnostics = {
+              status: replayQuality.usable ? "verified" : "rejected",
+              reason: replayQuality.usable
+                ? null
+                : "insufficient_analyzed_frame_density",
+              frameCount: replayQuality.frameCount,
+              effectiveFps: Number(replayQuality.effectiveFps.toFixed(2)),
+              durationMs: replay.durationMs
+            };
             if (replayQuality.usable) {
               analysisSourceFrames = buildPracticeVideoReplayFrames({
                 frames: replay.frames,
@@ -2323,6 +2333,12 @@ export default function PracticeMode({
             }
           } catch (error) {
             console.error("Recorded Practice verification failed", error);
+            videoReplayDiagnostics = {
+              status: "failed",
+              reason: error instanceof Error
+                ? error.message.slice(0, 240)
+                : "recorded_video_analysis_failed"
+            };
             setVideoVerificationStatus("fallback");
           }
         }
@@ -2373,7 +2389,11 @@ export default function PracticeMode({
           correctedAnalysis,
           { cleanAccuracy: CLEAN_ACCURACY }
         );
-        const correctedCompletedReps = correctedSummary.completed_reps;
+        const clusteredCompletedReps = correctedSummary.completed_reps;
+        const correctedCompletedReps = Math.min(
+          targetReps,
+          Math.max(repCountRef.current, clusteredCompletedReps)
+        );
         const completed = correctedCompletedReps >= targetReps;
         const remaining = Math.max(0, targetReps - correctedCompletedReps);
         repCountRef.current = correctedCompletedReps;
@@ -2391,9 +2411,10 @@ export default function PracticeMode({
             ? "recorded-video"
             : "live-pose-tape",
           videoReplay: videoReplayMetadata,
+          videoReplayDiagnostics,
           frameOrganizationVersion: 2,
           clusteredCompletedReps:
-            correctedCompletedReps,
+            clusteredCompletedReps,
           completionStatus: completed ? "completed" : "incomplete",
           completedReps: correctedCompletedReps,
           correctedSummary,
