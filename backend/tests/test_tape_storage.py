@@ -86,6 +86,22 @@ class TapeStorageValidationTests(unittest.TestCase):
         parsed, _digest = parse_and_validate_tape(json.dumps(document).encode())
         self.assertEqual(parsed["metadata"]["analysisEngine"], "both")
 
+    def test_acp_forecast_summary_metadata_is_allowed(self):
+        document = valid_document()
+        document["metadata"]["acpForecastSummary"] = {
+            "coverage": 0.959,
+            "usableSamples": 210,
+            "dominantIntent": "hold_likely",
+            "levels": {
+                "l1": {"confidence": 0.857, "frames": 6},
+                "l3": {"confidence": 0.812, "frames": 30},
+            },
+        }
+        parsed, _digest = parse_and_validate_tape(json.dumps(document).encode())
+        summary = parsed["metadata"]["acpForecastSummary"]
+        self.assertEqual(summary["usableSamples"], 210)
+        self.assertEqual(summary["levels"]["l3"]["frames"], 30)
+
     def test_rule_engine_quality_evidence_depth_is_allowed(self):
         document = valid_document()
         document["metadata"]["ruleEngineAnalysis"] = {

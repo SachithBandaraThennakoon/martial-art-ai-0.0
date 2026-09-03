@@ -46,6 +46,7 @@ METADATA_KEYS = {
     "captureDurationMs", "canonicalCompletedReps", "canonicalTargetReps",
     "algorithmVersion", "configVersion", "deviceGeneratedEstimate",
     "analysisEngine", "analysisAuthority", "videoReplay", "videoReplayDiagnostics",
+    "acpForecastSummary",
 }
 
 

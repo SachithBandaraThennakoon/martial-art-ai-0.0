@@ -82,6 +82,20 @@ const PRACTICE_FINAL_ANALYSIS_GRACE_MS = 4000;
 const LOCAL_SESSION = { id: null, status: "active" };
 const PRACTICE_VOICE_GENDER = "male";
 const DIAGNOSTIC_TRACE_ENABLED = import.meta.env.DEV;
+
+function downloadSessionJson(payload, filename) {
+  const url = URL.createObjectURL(
+    new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" })
+  );
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 const TAPE_CONNECTIONS = [
   [0, 11], [0, 12], [11, 12], [11, 13], [13, 15], [12, 14], [14, 16],
   [11, 23], [12, 24], [23, 24], [23, 25], [25, 27], [24, 26], [26, 28]
@@ -1329,13 +1343,13 @@ export default function PracticeMode({
       : Number.isFinite(correctedRuleSummary?.average_accuracy)
         ? Math.round(correctedRuleSummary.average_accuracy * 100)
         : fullTapeAverageAccuracy;
+  // The full-session result must be derived from the observed tape. Live
+  // counter updates and strict replay are retained as diagnostics, but neither
+  // can promote an unverified session to complete after post-session analysis.
   const completionEvidence = [
     canonicalSessionAnalysis?.clustered_completed_repetitions,
     analysisTapeMetadata?.clusteredCompletedReps,
-    analysisTapeMetadata?.completedReps,
-    authoritativeSession?.completed_reps,
-    correctedRuleSummary?.completed_repetitions,
-    popupRepTape.length
+    analysisTapeMetadata?.correctedSummary?.completed_reps
   ].map(Number).filter(Number.isFinite);
   const displayedCompletedReps = Math.min(
     Number(tapeTargetReps) || 50,
@@ -2444,10 +2458,10 @@ export default function PracticeMode({
           { cleanAccuracy: CLEAN_ACCURACY }
         );
         const clusteredCompletedReps = correctedSummary.completed_reps;
-        const correctedCompletedReps = Math.min(
-          targetReps,
-          Math.max(repCountRef.current, clusteredCompletedReps)
-        );
+        // Post-session clustering is the count authority. The live counter is
+        // intentionally not used here: it can advance before a complete
+        // Guard → Extension → Return movement is present in the saved tape.
+        const correctedCompletedReps = Math.min(targetReps, clusteredCompletedReps);
         const completed = correctedCompletedReps >= targetReps;
         const remaining = Math.max(0, targetReps - correctedCompletedReps);
         repCountRef.current = correctedCompletedReps;
@@ -4011,7 +4025,7 @@ export default function PracticeMode({
                   : analysisEngine === "model" ? "Model" : "Rules"}
               </p>
               <strong>
-                Reconciled result {displayedCompletedReps}/{tapeTargetReps}
+                Observed result {displayedCompletedReps}/{tapeTargetReps}
                 {hasStrictRuleAnalysis && strictReplayReliable && isAdminStudio
                   ? ` · Rule verified ${strictVerifiedReps}/${tapeTargetReps}`
                   : ""}
@@ -4026,6 +4040,43 @@ export default function PracticeMode({
                 type="button"
               >
                 {isTapePopupExpanded ? "Collapse" : "Expand"}
+              </button>
+              <button
+                onClick={() => {
+                  const techniqueFilePart = (
+                    analysisTapeMetadata?.techniqueName || currentTechnique?.name || "practice"
+                  )
+                    .trim()
+                    .toLowerCase()
+                    .replace(/[^a-z0-9]+/g, "-")
+                    .replace(/^-|-$/g, "");
+                  downloadSessionJson(
+                    {
+                      schemaVersion: 1,
+                      exportedAt: new Date().toISOString(),
+                      source: "practice-session-analysis",
+                      session: {
+                        id: analysisTapeMetadata?.sessionId || sessionRef.current?.id || null,
+                        technique: analysisTapeMetadata?.techniqueName || currentTechnique?.name || "Practice",
+                        targetReps: tapeTargetReps,
+                        completedReps: displayedCompletedReps,
+                        durationMs: fullTapeDurationMs,
+                        analysisEngine
+                      },
+                      metadata: analysisTapeMetadata || {},
+                      analysis: {
+                        canonical: canonicalSessionAnalysis || null,
+                        ruleBased: ruleEngineSession || null,
+                        selectedFrame: fullTapeFrame || null
+                      },
+                      frames: fullTapeFrames
+                    },
+                    `${techniqueFilePart || "practice"}-session-analysis.json`
+                  );
+                }}
+                type="button"
+              >
+                Download JSON
               </button>
               <button
                 onClick={() => {
