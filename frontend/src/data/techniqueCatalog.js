@@ -1,5 +1,6 @@
 import { listTechniqueDataPackages } from "./techniqueDataRegistry.js";
 import { getTrackingTechniquePackage } from "../tracking/techniquePackageRegistry.js";
+import { normalizeRuntimeSteps } from "../utils/runtimeTechniqueNormalization.js";
 
 export const CATEGORY_ORDER = [
   "Flexibility & Mobility",
@@ -187,13 +188,7 @@ export function slugify(value) {
 
 export function normalizeRuntimeTechnique({ technique, trainingConfig, fallback }) {
   const techniqueId = technique?.slug || fallback?.id || slugify(technique?.name || "");
-  const steps = (trainingConfig?.steps || []).map((step, index) => ({
-    ...step,
-    difficulty_profiles: step.difficulty_profiles || trainingConfig?.difficulty_profiles || null,
-    step_number: step.step_number ?? index + 1,
-    step_name: step.step_name || `Step ${index + 1}`,
-    angles: step.angles || (step.angle_targets || []).map(({ body_part, min, max }) => ({ body_part, min, max }))
-  }));
+  const steps = normalizeRuntimeSteps(trainingConfig);
   return {
     ...fallback,
     id: techniqueId,

@@ -45,7 +45,7 @@ METADATA_KEYS = {
     "captureMarginsMs", "steps", "authoritativeSession", "ruleEngineAnalysis",
     "captureDurationMs", "canonicalCompletedReps", "canonicalTargetReps",
     "algorithmVersion", "configVersion", "deviceGeneratedEstimate",
-    "analysisAuthority", "videoReplay", "videoReplayDiagnostics",
+    "analysisEngine", "analysisAuthority", "videoReplay", "videoReplayDiagnostics",
 }
 
 
@@ -65,7 +65,10 @@ def _validate_tree(value, *, depth=0, count=None):
     if count is None:
         count = [0]
     count[0] += 1
-    if count[0] > 20000 or depth > 6:
+    # Rule-engine repetition evidence legitimately reaches seven levels below
+    # metadata (summary -> repetitions -> quality_evidence -> metric fields).
+    # Keep a hard nesting bound while allowing the schema produced by Practice.
+    if count[0] > 20000 or depth > 10:
         raise HTTPException(status_code=422, detail="Tape metadata is too complex")
     if value is None or isinstance(value, bool):
         return

@@ -40,6 +40,7 @@ def valid_document():
             "sessionId": 7,
             "targetReps": 3,
             "techniqueName": "Jab",
+            "analysisEngine": "auto",
             "algorithmVersion": "biomechanics-v2",
             "configVersion": "jab-2026-08",
             "deviceGeneratedEstimate": True,
@@ -76,6 +77,37 @@ class TapeStorageValidationTests(unittest.TestCase):
     def test_unknown_metadata_is_rejected(self):
         document = valid_document()
         document["metadata"]["email"] = "should-not-be-here@example.com"
+        with self.assertRaises(HTTPException):
+            parse_and_validate_tape(json.dumps(document).encode())
+
+    def test_frontend_analysis_engine_metadata_is_allowed(self):
+        document = valid_document()
+        document["metadata"]["analysisEngine"] = "both"
+        parsed, _digest = parse_and_validate_tape(json.dumps(document).encode())
+        self.assertEqual(parsed["metadata"]["analysisEngine"], "both")
+
+    def test_rule_engine_quality_evidence_depth_is_allowed(self):
+        document = valid_document()
+        document["metadata"]["ruleEngineAnalysis"] = {
+            "summary": {
+                "repetitions": [{
+                    "quality_evidence": [{
+                        "feature": "lead_elbow_angle",
+                        "range": {"min": 155, "max": 177},
+                    }],
+                }],
+            },
+        }
+        parsed, _digest = parse_and_validate_tape(json.dumps(document).encode())
+        evidence = parsed["metadata"]["ruleEngineAnalysis"]["summary"]["repetitions"]
+        self.assertEqual(evidence[0]["quality_evidence"][0]["feature"], "lead_elbow_angle")
+
+    def test_excessive_metadata_nesting_is_rejected(self):
+        document = valid_document()
+        nested = "too deep"
+        for _ in range(12):
+            nested = {"child": nested}
+        document["metadata"]["ruleEngineAnalysis"] = nested
         with self.assertRaises(HTTPException):
             parse_and_validate_tape(json.dumps(document).encode())
 
