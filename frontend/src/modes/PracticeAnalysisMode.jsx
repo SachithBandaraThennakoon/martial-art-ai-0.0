@@ -3,6 +3,11 @@ import SessionAnalysisPanel from "../components/SessionAnalysisPanel";
 import StoredSessionTapePanel from "../components/StoredSessionTapePanel";
 import { API_BASE_URL } from "../services/api";
 import { authFetch, getAccessToken } from "../services/authSession";
+import {
+  buildPracticeAnalysisTrace,
+  downloadJsonDocument,
+  practiceAnalysisTraceFilename
+} from "../services/practiceAnalysisExport";
 
 const formatBodyPart = (bodyPart) =>
   bodyPart
@@ -48,6 +53,7 @@ const videoExtension = (mimeType) => {
 
 export default function PracticeAnalysisMode({
   hasTechniqueSelection = false,
+  isAdminStudio = false,
   onModeChange,
   onOpenLibrary,
   selectedTechniqueName = ""
@@ -57,6 +63,7 @@ export default function PracticeAnalysisMode({
   const [loadState, setLoadState] = useState("loading");
   const [exportState, setExportState] = useState("idle");
   const [videoDownloadStates, setVideoDownloadStates] = useState({});
+  const [traceDownloadStates, setTraceDownloadStates] = useState({});
   const [selectedTapeSessionId, setSelectedTapeSessionId] = useState(null);
 
   const loadAnalysis = useCallback(async (signal) => {
@@ -173,6 +180,52 @@ export default function PracticeAnalysisMode({
     }
   }, []);
 
+  const downloadAnalysisTrace = useCallback(async (session) => {
+    const token = getAccessToken();
+    if (!token || !session?.id || traceDownloadStates[session.id] === "loading") return;
+    setTraceDownloadStates((current) => ({
+      ...current,
+      [session.id]: "loading"
+    }));
+    try {
+      const response = await authFetch(
+        `${API_BASE_URL}/practice/sessions/${session.id}/tape`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const tapeAvailable = response.ok;
+      const tape = tapeAvailable ? await response.json() : null;
+      downloadJsonDocument(
+        buildPracticeAnalysisTrace({
+          session,
+          tape,
+          tapeStatus: tapeAvailable
+            ? "available"
+            : response.status === 404
+              ? "not-stored"
+              : `unavailable-http-${response.status}`
+        }),
+        practiceAnalysisTraceFilename(session)
+      );
+      setTraceDownloadStates((current) => ({
+        ...current,
+        [session.id]: "ready"
+      }));
+    } catch {
+      downloadJsonDocument(
+        buildPracticeAnalysisTrace({
+          session,
+          tape: null,
+          tapeStatus: "unavailable-request-error"
+        }),
+        practiceAnalysisTraceFilename(session)
+      );
+      setTraceDownloadStates((current) => ({
+        ...current,
+        [session.id]: "partial"
+      }));
+    }
+  }, [traceDownloadStates]);
+
   const summary = analysis?.summary;
   const trainingSummary = analysis?.training_summary;
   const sessions = analysis?.sessions || [];
@@ -225,6 +278,9 @@ export default function PracticeAnalysisMode({
               <button className="analysis-refresh" onClick={downloadResearchExport} type="button">
                 {exportState === "loading" ? "Preparing export…" : "Download research data"}
               </button>
+              {isAdminStudio ? (
+                <small>For issue diagnosis, download both the video and its analysis JSON below.</small>
+              ) : null}
               {exportState === "error" ? <small>Export failed. Please try again.</small> : null}
             </>
           ) : null}
@@ -451,6 +507,22 @@ export default function PracticeAnalysisMode({
                             ? "Download video"
                             : "No raw video"}
                   </button>
+                  {isAdminStudio ? (
+                    <button
+                      disabled={traceDownloadStates[session.id] === "loading"}
+                      onClick={() => downloadAnalysisTrace(session)}
+                      title="Download session analytics and, when available, the stored frame tape and landmarks as JSON"
+                      type="button"
+                    >
+                      {traceDownloadStates[session.id] === "loading"
+                          ? "Preparing JSON…"
+                        : traceDownloadStates[session.id] === "ready"
+                          ? "JSON downloaded"
+                          : traceDownloadStates[session.id] === "partial"
+                            ? "JSON downloaded · no tape"
+                            : "Download analysis JSON"}
+                    </button>
+                  ) : null}
                 </div>
               </article>
             ))

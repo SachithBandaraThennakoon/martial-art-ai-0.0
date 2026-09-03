@@ -105,6 +105,32 @@ class PracticeAnalyticsTests(unittest.TestCase):
         self.assertEqual(forecast["dominant_transition"], "completion_candidate")
         self.assertFalse(forecast["affects_rep_count"])
 
+    def test_video_cluster_recovers_reps_missed_by_strict_v2_diagnostics(self):
+        payload = extract_practice_analytics({
+            "canonicalCompletedReps": 5,
+            "canonicalTargetReps": 5,
+            "correctedSummary": {
+                "completed_reps": 5,
+                "average_accuracy": 87.9,
+            },
+            "ruleEngineAnalysis": {
+                "summary": {
+                    "analysis_schema_version": "2.0",
+                    "detected_attempts": 1,
+                    "completed_motions": 1,
+                    "completed_repetitions": 1,
+                    "aborted_repetitions": 0,
+                    "technique_quality": 1,
+                }
+            },
+        })
+
+        self.assertEqual(payload["completed_repetitions"], 5)
+        self.assertEqual(payload["detected_attempts"], 1)
+        self.assertEqual(payload["completion_source"], "post_session_cluster")
+        self.assertEqual(payload["aborted_repetitions"], 0)
+        self.assertEqual(payload["average_accuracy"], 87.9)
+
     def test_post_session_result_is_not_overwritten_by_stale_session_count(self):
         payload = extract_practice_analytics({
             "canonicalCompletedReps": 4,

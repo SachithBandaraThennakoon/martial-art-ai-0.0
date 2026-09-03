@@ -504,6 +504,7 @@ export default function TrainingStudio({ analysisPreview = false, studioMode = "
         />
       ) : (
         <PracticeAnalysisMode
+          isAdminStudio={isAdminStudio}
           previewMode={analysisPreview}
           hasTechniqueSelection={hasTechniqueSelection}
           onModeChange={updateMode}

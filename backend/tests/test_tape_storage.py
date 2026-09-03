@@ -102,6 +102,17 @@ class TapeStorageValidationTests(unittest.TestCase):
         self.assertEqual(summary["usableSamples"], 210)
         self.assertEqual(summary["levels"]["l3"]["frames"], 30)
 
+    def test_frontend_acp_frame_evidence_is_allowed(self):
+        document = valid_document()
+        document["frames"][0]["af"] = {
+            "observed": {"confidence": 0.94},
+            "forecast": {"horizon_ms": 200, "risk": 0.12},
+        }
+
+        parsed, _digest = parse_and_validate_tape(json.dumps(document).encode())
+
+        self.assertEqual(parsed["frames"][0]["af"]["forecast"]["horizon_ms"], 200)
+
     def test_rule_engine_quality_evidence_depth_is_allowed(self):
         document = valid_document()
         document["metadata"]["ruleEngineAnalysis"] = {

@@ -103,7 +103,6 @@ def extract_practice_analytics(metadata):
         or rule_summary.get("detected_attempts") is not None
     )
     if is_rule_v2:
-        completion_source = "rule_engine_v2"
         detected_attempts = max(0, _integer(rule_summary.get("detected_attempts")))
         completed_motions = max(
             0,
@@ -114,9 +113,19 @@ def extract_practice_analytics(metadata):
                 )
             ),
         )
-        # Keep the historical field as the performed-repetition count so older
-        # dashboard clients receive the same authoritative v2 value.
-        completed_repetitions = detected_attempts
+        # The strict v2 detector remains diagnostic evidence. Recorded-video
+        # post-session clustering and the persisted session count can recover
+        # repetitions that the strict detector missed, so retain the strongest
+        # observed completion result for dashboard history.
+        v2_completion_candidates = [
+            *available_completion_candidates,
+            ("rule_engine_v2", detected_attempts),
+        ]
+        completion_source, completed_repetitions = max(
+            v2_completion_candidates,
+            key=lambda item: item[1],
+            default=("unavailable", 0),
+        )
     else:
         completion_source, corrected_completed = max(
             available_completion_candidates,
@@ -134,8 +143,7 @@ def extract_practice_analytics(metadata):
         aborted_repetitions = max(
             0,
             _integer(rule_summary.get("aborted_repetitions")),
-            detected_attempts - completed_motions,
-            _integer(target_repetitions) - completed_motions
+            _integer(target_repetitions) - completed_repetitions
             if target_repetitions is not None else 0,
         )
     else:
@@ -195,6 +203,11 @@ def extract_practice_analytics(metadata):
             if rule_summary.get("average_response_time_ms") is not None
             else None
         ),
+        "average_accuracy": (
+            max(0, min(100, round(_number(corrected.get("average_accuracy")), 1)))
+            if corrected.get("average_accuracy") is not None
+            else None
+        ),
         "tracking_quality_percentage": (
             max(
                 0,
@@ -245,16 +258,20 @@ def _decode_payload(record):
 
 
 def canonical_practice_rep_count(session, analytics=None):
-    """Return the v2 detected-attempt count, falling back for legacy sessions."""
+    """Return the reconciled observed count, falling back to the session row."""
     analytics = analytics if isinstance(analytics, dict) else {}
+    if analytics.get("completed_repetitions") is not None:
+        return max(0, _integer(analytics.get("completed_repetitions")))
     if analytics.get("detected_attempts") is not None:
         return max(0, _integer(analytics.get("detected_attempts")))
     return max(0, _integer(getattr(session, "completed_reps", 0)))
 
 
 def canonical_practice_accuracy(session, analytics=None):
-    """Return v2 biomechanical quality as a percentage when it is available."""
+    """Return reconciled full-session accuracy when it is available."""
     analytics = analytics if isinstance(analytics, dict) else {}
+    if analytics.get("average_accuracy") is not None:
+        return max(0, min(100, _number(analytics.get("average_accuracy"))))
     if analytics.get("technique_quality") is not None:
         return max(0, min(100, _number(analytics.get("technique_quality")) * 100))
     return max(0, min(100, _number(getattr(session, "average_accuracy", 0))))

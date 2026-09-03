@@ -36,7 +36,7 @@ FRAME_KEYS = {
     "t", "st", "n", "r", "s", "a", "f", "i", "w", "p", "op", "wp", "ap",
     "av", "ss", "tc", "ds", "face", "fs", "hl", "hr", "cq", "ct", "ao", "at",
     "mp", "ph", "tp", "cf", "tr", "pc", "pe", "pf", "pcf", "fa", "lr", "ls",
-    "lph", "ltp", "es", "ms", "mk", "nr", "dr", "qs", "ps", "sc", "rc",
+    "lph", "ltp", "es", "ms", "mk", "nr", "dr", "qs", "ps", "sc", "rc", "af",
 }
 METADATA_KEYS = {
     "sessionId", "targetReps", "countGapMs", "techniqueName", "biomechanicsSchema",

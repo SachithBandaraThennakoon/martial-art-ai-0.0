@@ -96,7 +96,7 @@ const NATURAL_VOICE_CACHE_LIMIT = 24;
 const MASTERY_HOLD_MS = 1200;
 const STABLE_CORRECTION_CONFIRM_MS = 500;
 const GUIDANCE_COOLDOWN_MS = 12000;
-const DIAGNOSTIC_TRACE_ENABLED = import.meta.env.DEV;
+const DEVELOPMENT_DIAGNOSTIC_TRACE_ENABLED = import.meta.env.DEV;
 const splitVoiceWords = (message) =>
   message
     .trim()
@@ -143,6 +143,8 @@ export default function TrainMode({
   onPredictionStatus,
   analysisEngine = "auto"
 }) {
+  const diagnosticTraceEnabled =
+    DEVELOPMENT_DIAGNOSTIC_TRACE_ENABLED || isAdminStudio;
   const currentTechnique = useMemo(
     () =>
       getTechniqueFromCatalog({
@@ -235,7 +237,7 @@ export default function TrainMode({
   const lastDiagnosticCoachSignatureRef = useRef("");
   const lastDiagnosticCountUiAtRef = useRef(0);
   const diagnosticRecorderRef = useRef(null);
-  if (DIAGNOSTIC_TRACE_ENABLED && !diagnosticRecorderRef.current) {
+  if (diagnosticTraceEnabled && !diagnosticRecorderRef.current) {
     diagnosticRecorderRef.current = createDiagnosticTraceRecorder();
   }
   const safeStepIndex =
@@ -374,9 +376,9 @@ export default function TrainMode({
   };
 
   const handleDiagnosticFrame = useCallback((frame) => {
-    if (!DIAGNOSTIC_TRACE_ENABLED) return;
+    if (!diagnosticTraceEnabled) return;
     latestDiagnosticFrameRef.current = frame;
-  }, []);
+  }, [diagnosticTraceEnabled]);
 
   const syncDiagnosticTraceCount = useCallback((force = false) => {
     const now = performance.now();
@@ -427,17 +429,17 @@ export default function TrainMode({
   }, []);
 
   const recordDiagnosticEvent = useCallback((kind, payload = {}) => {
-    if (!DIAGNOSTIC_TRACE_ENABLED) return;
+    if (!diagnosticTraceEnabled) return;
     if (diagnosticRecorderRef.current?.event(kind, {
       step: diagnosticContextRef.current.step,
       ...payload
     })) {
       syncDiagnosticTraceCount();
     }
-  }, [syncDiagnosticTraceCount]);
+  }, [diagnosticTraceEnabled, syncDiagnosticTraceCount]);
 
   useEffect(() => {
-    if (!DIAGNOSTIC_TRACE_ENABLED || !coachEvent) return;
+    if (!diagnosticTraceEnabled || !coachEvent) return;
     const signature = JSON.stringify([
       coachEvent.action || null,
       coachText(coachEvent),
@@ -468,10 +470,10 @@ export default function TrainMode({
     })) {
       syncDiagnosticTraceCount();
     }
-  }, [coachEvent, syncDiagnosticTraceCount]);
+  }, [coachEvent, diagnosticTraceEnabled, syncDiagnosticTraceCount]);
 
   useEffect(() => {
-    if (!DIAGNOSTIC_TRACE_ENABLED || !diagnosticTraceActive) return undefined;
+    if (!diagnosticTraceEnabled || !diagnosticTraceActive) return undefined;
     const capture = () => {
       const latest = latestDiagnosticFrameRef.current || {};
       try {
@@ -493,7 +495,7 @@ export default function TrainMode({
     capture();
     const timer = window.setInterval(capture, 200);
     return () => window.clearInterval(timer);
-  }, [diagnosticTraceActive, syncDiagnosticTraceCount]);
+  }, [diagnosticTraceActive, diagnosticTraceEnabled, syncDiagnosticTraceCount]);
 
   useEffect(() => () => {
     if (diagnosticRecorderRef.current?.isActive()) {
@@ -904,7 +906,7 @@ export default function TrainMode({
 
     if (!trimmed) return;
     const commandId = `${Date.now()}-${trimmed}`;
-    if (DIAGNOSTIC_TRACE_ENABLED && diagnosticRecorderRef.current.event("user_response", {
+    if (diagnosticTraceEnabled && diagnosticRecorderRef.current.event("user_response", {
       step: diagnosticContextRef.current.step,
       message: trimmed,
       request_id: commandId,
@@ -994,6 +996,7 @@ export default function TrainMode({
     appendConversation,
     compositeForm,
     currentStep,
+    diagnosticTraceEnabled,
     requiresResponse,
     safeStepIndex,
     steps,
@@ -1704,7 +1707,7 @@ export default function TrainMode({
           onSituationAwarenessUpdate={setSituationAwarenessState}
           onRuleEngineSessionComplete={setRuleEngineSessionSummary}
           onRuleEngineFrameUpdate={setRuleEngineFrame}
-          onLandmarkFrame={DIAGNOSTIC_TRACE_ENABLED ? handleDiagnosticFrame : undefined}
+          onLandmarkFrame={diagnosticTraceEnabled ? handleDiagnosticFrame : undefined}
           trackingSessionActive={trainSessionActive}
           trackingSessionPaused={trainSessionPaused}
           onAccuracyUpdate={setServerAccuracy}
@@ -1789,7 +1792,7 @@ export default function TrainMode({
           </div>
         </div>
 
-        {DIAGNOSTIC_TRACE_ENABLED ? (
+        {diagnosticTraceEnabled ? (
           <DiagnosticTraceControls
             active={diagnosticTraceActive}
             recordCount={diagnosticTraceCount}

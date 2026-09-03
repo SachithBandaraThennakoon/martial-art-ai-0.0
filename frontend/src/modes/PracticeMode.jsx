@@ -81,7 +81,7 @@ const PRACTICE_POST_ROLL_MS = 700;
 const PRACTICE_FINAL_ANALYSIS_GRACE_MS = 4000;
 const LOCAL_SESSION = { id: null, status: "active" };
 const PRACTICE_VOICE_GENDER = "male";
-const DIAGNOSTIC_TRACE_ENABLED = import.meta.env.DEV;
+const DEVELOPMENT_DIAGNOSTIC_TRACE_ENABLED = import.meta.env.DEV;
 
 function downloadSessionJson(payload, filename) {
   const url = URL.createObjectURL(
@@ -935,6 +935,8 @@ export default function PracticeMode({
   autoStartVideoAnalysis = false,
   initialTargetReps = 5
 }) {
+  const diagnosticTraceEnabled =
+    DEVELOPMENT_DIAGNOSTIC_TRACE_ENABLED || isAdminStudio;
   const currentTechnique = useMemo(
     () =>
       getTechniqueFromCatalog({
@@ -1194,7 +1196,7 @@ export default function PracticeMode({
   const lastDiagnosticRepRef = useRef(0);
   const lastDiagnosticSessionStatusRef = useRef(null);
   const diagnosticRecorderRef = useRef(null);
-  if (DIAGNOSTIC_TRACE_ENABLED && !diagnosticRecorderRef.current) {
+  if (diagnosticTraceEnabled && !diagnosticRecorderRef.current) {
     diagnosticRecorderRef.current = createDiagnosticTraceRecorder();
   }
 
@@ -1539,7 +1541,7 @@ export default function PracticeMode({
   }, []);
 
   useEffect(() => {
-    if (!DIAGNOSTIC_TRACE_ENABLED || !diagnosticTraceActive) return undefined;
+    if (!diagnosticTraceEnabled || !diagnosticTraceActive) return undefined;
     const capture = () => {
       const latest = latestDiagnosticFrameRef.current || {};
       const context = diagnosticContextRef.current;
@@ -1568,10 +1570,10 @@ export default function PracticeMode({
     capture();
     const timer = window.setInterval(capture, 200);
     return () => window.clearInterval(timer);
-  }, [diagnosticTraceActive, syncDiagnosticTraceCount]);
+  }, [diagnosticTraceActive, diagnosticTraceEnabled, syncDiagnosticTraceCount]);
 
   useEffect(() => {
-    if (!DIAGNOSTIC_TRACE_ENABLED || !diagnosticTraceActive) return;
+    if (!diagnosticTraceEnabled || !diagnosticTraceActive) return;
     const event = ruleEngineLiveFrame?.temporal_event;
     if (!event?.id || event.id === lastDiagnosticTemporalEventRef.current) return;
     lastDiagnosticTemporalEventRef.current = event.id;
@@ -1586,10 +1588,10 @@ export default function PracticeMode({
       state_scores: ruleEngineLiveFrame.state_scores || {},
       rule_evidence: ruleEngineLiveFrame.rule_evidence || null
     })) syncDiagnosticTraceCount();
-  }, [diagnosticTraceActive, ruleEngineLiveFrame, syncDiagnosticTraceCount]);
+  }, [diagnosticTraceActive, diagnosticTraceEnabled, ruleEngineLiveFrame, syncDiagnosticTraceCount]);
 
   useEffect(() => {
-    if (!DIAGNOSTIC_TRACE_ENABLED || !diagnosticTraceActive) return;
+    if (!diagnosticTraceEnabled || !diagnosticTraceActive) return;
     if (cueCount !== lastDiagnosticCueRef.current) {
       lastDiagnosticCueRef.current = cueCount;
       if (diagnosticRecorderRef.current?.event("count_cue", {
@@ -1624,6 +1626,7 @@ export default function PracticeMode({
     countGapMs,
     cueCount,
     diagnosticTraceActive,
+    diagnosticTraceEnabled,
     repCount,
     session?.id,
     session?.status,
@@ -1710,7 +1713,7 @@ export default function PracticeMode({
   }, []);
 
   const handleLandmarkFrame = useCallback((frame) => {
-    if (DIAGNOSTIC_TRACE_ENABLED) {
+    if (diagnosticTraceEnabled) {
       latestDiagnosticFrameRef.current = frame;
     }
     latestLandmarksRef.current = frame?.pose || [];
@@ -1783,7 +1786,7 @@ export default function PracticeMode({
         }
       }, 0);
     }
-  }, [steps]);
+  }, [diagnosticTraceEnabled, steps]);
 
   const loadPracticeAnalysis = useCallback(async (signal) => {
     const token = getAccessToken();
@@ -3519,7 +3522,7 @@ export default function PracticeMode({
           onLevel4Update={setLevel4State}
           onSituationAwarenessUpdate={setSituationAwarenessState}
           onRuleEngineFrameUpdate={
-            isAdminStudio || DIAGNOSTIC_TRACE_ENABLED
+            isAdminStudio || diagnosticTraceEnabled
               ? handleRuleEngineLiveFrame
               : undefined
           }
@@ -3779,7 +3782,7 @@ export default function PracticeMode({
           </p>
         </div>
 
-        {DIAGNOSTIC_TRACE_ENABLED ? (
+        {diagnosticTraceEnabled ? (
           <DiagnosticTraceControls
             active={diagnosticTraceActive}
             description="Captures compact landmarks and angles at 5 Hz, plus the Jab rule classifier, evidence scores, canonical phases, transitions, cues, reps, and the full analysis pipeline every second. Practice recordings are stored separately as private raw session video."
