@@ -75,10 +75,20 @@ export default function DataLayersPanel({
           },
           { key: "tracking.fps", value: level1State?.tracking?.fps || "--" },
           {
-            key: "motion_context.prediction_confidence",
-            value: `${formatDecimal(motion.prediction_confidence)} (${formatPercent(motion.prediction_confidence)})`
+            key: "motion_context.filter",
+            value: formatLabel(motion.filter)
           },
-          { key: "motion_context.prediction_horizon_ms", value: motion.prediction_horizon_ms || "--" },
+          { key: "motion_context.smoothing_alpha", value: formatDecimal(motion.smoothing_alpha) },
+          {
+            key: "forecast_context.model",
+            value: level1State?.forecast_context?.model_name || "--"
+          },
+          {
+            key: "forecast_context.level1_band",
+            value: level1State?.forecast_context?.bands?.level1
+              ? `frames ${level1State.forecast_context.bands.level1.start_frame}-${level1State.forecast_context.bands.level1.end_frame}`
+              : "--"
+          },
           { key: "angles_count", value: Object.keys(motion.angles_deg || {}).length }
         ]}
       />
@@ -107,7 +117,13 @@ export default function DataLayersPanel({
           { key: "temporal_segmentation.event", value: formatLabel(segmentation.event?.type) },
           { key: "likely_mistake.body_part", value: formatLabel(action.likely_mistake?.body_part) },
           { key: "likely_mistake.issue", value: formatLabel(action.likely_mistake?.issue) },
-          { key: "next_step_prediction", value: formatLabel(action.next_step_prediction) }
+          { key: "next_step_prediction", value: formatLabel(action.next_step_prediction) },
+          {
+            key: "forecast_band",
+            value: action.attention_prediction?.forecast_band
+              ? `frames ${action.attention_prediction.forecast_band.start_frame}-${action.attention_prediction.forecast_band.end_frame}`
+              : "--"
+          }
         ]}
       />
 
@@ -132,6 +148,9 @@ export default function DataLayersPanel({
           { key: "recommendation", value: formatLabel(session.recommendation) },
           { key: "temporal_phase", value: formatLabel(session.temporal_phase) },
           { key: "latest_event", value: formatLabel(session.latest_event?.type) },
+          { key: "forecast.intent", value: formatLabel(session.shared_forecast?.predicted_intent) },
+          { key: "forecast.transition", value: formatLabel(session.predicted_transition?.transition) },
+          { key: "forecast.next_phase", value: formatLabel(session.predicted_transition?.next_phase) },
           { key: "repetitions_completed", value: repetitionSummary.repetitions_completed || 0 },
           { key: "correct_repetitions", value: repetitionSummary.correct_repetitions || 0 },
           {

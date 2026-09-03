@@ -11,7 +11,10 @@ import {
   getTechniqueTrackingPackage,
   techniqueCatalog
 } from "../data/techniqueCatalog";
-import { TrackingSessionEngine } from "../tracking/trackingSessionEngine";
+import {
+  buildAcpSessionSummary,
+  compactAcpFrameEvidence
+} from "../temporal/acpSessionSummary";
 
 const formatPercent = (value) => {
   if (!Number.isFinite(value)) return "--";
@@ -60,10 +63,13 @@ function toSessionRecord(result, techniqueName, expectedReps) {
     id: `uploaded-${result.engine}-${result.completedAt}`,
     technique_name: techniqueName,
     mode: "practice",
-    status: summary.detected_attempts === expectedReps ? "completed" : "incomplete",
+    // A movement attempt can end early (for example, when the video stops
+    // before the fist returns to guard). Only a completed motion may satisfy
+    // the requested set count.
+    status: summary.completed_motions === expectedReps ? "completed" : "incomplete",
     started_at: result.startedAt,
     ended_at: result.completedAt,
-    completed_reps: summary.detected_attempts,
+    completed_reps: summary.completed_motions,
     target_reps: expectedReps,
     clean_reps: cleanReps,
     average_accuracy: percentValue(summary.technique_quality),
@@ -72,7 +78,8 @@ function toSessionRecord(result, techniqueName, expectedReps) {
       : Number(consistency.toFixed(1)),
     analytics: {
       ...summary,
-      average_accuracy: percentValue(summary.technique_quality)
+      average_accuracy: percentValue(summary.technique_quality),
+      forecast_summary: result.forecastSummary || null
     }
   };
 }
@@ -207,16 +214,82 @@ function EngineTimelinePanel({ expectedReps, result }) {
 
 function resultStatus(result, expectedReps) {
   if (!result) return "Not run";
-  const detectedReps = result.summary.detected_attempts;
-  if (detectedReps === expectedReps) return "Expected count matched";
-  if (detectedReps === 0) return "No repetitions detected";
-  return `Detected ${detectedReps} of ${expectedReps}`;
+  const completedReps = result.summary.completed_motions;
+  if (completedReps === expectedReps) return "Expected count matched";
+  if (completedReps === 0) return "No completed repetitions";
+  return `Completed ${completedReps} of ${expectedReps}`;
+}
+
+function applyRepCorrections(result, excludedRepIds) {
+  if (!result || !excludedRepIds.size) return result;
+  const repetitions = (result.summary.repetitions || []).filter(
+    (repetition) => !excludedRepIds.has(repetition.rep_id)
+  );
+  const completed = repetitions.filter((repetition) => repetition.status === "completed");
+  const aborted = repetitions.filter((repetition) => repetition.status !== "completed");
+  const detectionValues = repetitions
+    .map((repetition) => repetition.detection_confidence ?? repetition.confidence)
+    .filter(Number.isFinite);
+  const qualityValues = repetitions
+    .map((repetition) => repetition.technique_quality)
+    .filter(Number.isFinite);
+  const average = (values) => values.length
+    ? values.reduce((sum, value) => sum + value, 0) / values.length
+    : 0;
+  return {
+    ...result,
+    summary: {
+      ...result.summary,
+      repetitions,
+      total_repetitions: repetitions.length,
+      detected_attempts: repetitions.length,
+      completed_repetitions: completed.length,
+      completed_motions: completed.length,
+      aborted_repetitions: aborted.length,
+      detection_confidence: average(detectionValues),
+      technique_quality: average(qualityValues),
+      corrections_applied: (result.summary.corrections_applied || 0) + excludedRepIds.size
+    }
+  };
+}
+
+function RepCorrectionPanel({ excludedRepIds, onToggle, result }) {
+  const repetitions = result?.summary?.repetitions || [];
+  if (!repetitions.length) return null;
+  return (
+    <section className="admin-video-analysis__corrections">
+      <header>
+        <div>
+          <p className="eyebrow">Review corrections</p>
+          <h2>Exclude false movement attempts</h2>
+        </div>
+        <small>Changes update this analysis only; the raw detector timeline remains available.</small>
+      </header>
+      <div>
+        {repetitions.map((repetition) => {
+          const excluded = excludedRepIds.has(repetition.rep_id);
+          return (
+            <button
+              aria-pressed={excluded}
+              className={excluded ? "btn btn--ghost" : "btn btn--light"}
+              key={repetition.rep_id}
+              onClick={() => onToggle(repetition.rep_id)}
+              type="button"
+            >
+              {excluded ? `Restore rep ${repetition.rep_id}` : `Exclude rep ${repetition.rep_id}`}
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
 }
 
 function AnalysisResultCard({ expectedReps, result, title }) {
   if (!result) return null;
   const summary = result.summary;
   const errors = summary.common_form_errors || [];
+  const forecast = result.forecastSummary;
 
   return (
     <article className="admin-video-analysis__result">
@@ -277,6 +350,18 @@ function AnalysisResultCard({ expectedReps, result, title }) {
         )}
       </section>
 
+      {forecast ? (
+        <section>
+          <h2>ACP-STGAT session evidence</h2>
+          <ul>
+            <li><span>Forecast coverage</span><strong>{forecast.coverage_percentage}%</strong></li>
+            <li><span>Dominant intent</span><strong>{formatLabel(forecast.dominant_intent)}</strong></li>
+            <li><span>Transition candidate</span><strong>{formatLabel(forecast.dominant_transition)}</strong></li>
+            <li><span>Rep-count authority</span><strong>Observed rules only</strong></li>
+          </ul>
+        </section>
+      ) : null}
+
     </article>
   );
 }
@@ -292,9 +377,17 @@ export default function AdminVideoAnalysis() {
   const [liveCount, setLiveCount] = useState(0);
   const [playerVersion, setPlayerVersion] = useState(0);
   const [isSessionPopupOpen, setIsSessionPopupOpen] = useState(false);
+  const [excludedRepIds, setExcludedRepIds] = useState(() => new Set());
+  const [predictionStatus, setPredictionStatus] = useState({
+    status: "disabled",
+    ready: false,
+    error: null
+  });
+  const [lastForecastEvidence, setLastForecastEvidence] = useState(null);
   const videoControllerRef = useRef(null);
-  const enginesRef = useRef({});
   const lastFrameRef = useRef(null);
+  const forecastFramesRef = useRef([]);
+  const lastForecastUiAtRef = useRef(0);
   const runRef = useRef({
     active: false,
     frameCount: 0,
@@ -339,24 +432,27 @@ export default function AdminVideoAnalysis() {
 
   const finalizeRun = useCallback((completionStatus = "Finished") => {
     if (!runRef.current.active) return;
-    runRef.current.active = false;
-    const endedAt = Number(lastFrameRef.current?.timestamp_ms) || performance.now();
-    const completedAt = new Date().toISOString();
-    const nextResults = {};
+    // SkeletonCanvas owns the authoritative TrackingSessionEngine. Turning the
+    // session off causes it to end with the same timestamped feature stream it
+    // used during playback and returns that single summary below.
+    runRef.current.completionStatus = completionStatus;
+    setIsRunning(false);
+  }, []);
 
-    Object.entries(enginesRef.current).forEach(([engineName, engine]) => {
-      nextResults[engineName] = {
-        engine: engineName,
+  const handleRuleEngineSessionComplete = useCallback((summary) => {
+    if (!summary || !runRef.current.active) return;
+    const completionStatus = runRef.current.completionStatus || "Video finished.";
+    runRef.current.active = false;
+    setResults({
+      rules: {
+        engine: "rules",
         frameCount: runRef.current.frameCount,
         startedAt: runRef.current.startedAt,
-        completedAt,
-        summary: engine.end(endedAt)
-      };
+        completedAt: new Date().toISOString(),
+        summary,
+        forecastSummary: buildAcpSessionSummary(forecastFramesRef.current)
+      }
     });
-
-    enginesRef.current = {};
-    setResults(nextResults);
-    setIsRunning(false);
     setInputStatus(completionStatus);
     setIsSessionPopupOpen(true);
   }, []);
@@ -367,7 +463,6 @@ export default function AdminVideoAnalysis() {
       finalizeRun(status);
     } else if (String(status).includes("could not play")) {
       runRef.current.active = false;
-      enginesRef.current = {};
       setIsRunning(false);
     }
   }, [finalizeRun]);
@@ -377,23 +472,25 @@ export default function AdminVideoAnalysis() {
     lastFrameRef.current = frame;
     setLastFrame(frame);
     runRef.current.frameCount += 1;
-    const commonInput = {
-      timestampMs: frame.timestamp_ms,
-      features: frame.features || {},
-      trackingConfidence: frame.tracking_confidence,
-      evaluationContext: {},
-      learnedStatePrediction: null,
-      learnedModelExpected: false,
-      frameIndex: frame.frame_index,
-      videoTimestampMs: frame.video_timestamp_ms,
-      processingTimestampMs: frame.processing_timestamp_ms,
-      deltaVideoMs: frame.delta_video_ms
-    };
-    enginesRef.current.rules?.updateFeatures(commonInput);
-    setLiveCount(
-      (enginesRef.current.rules?.repetitions.length || 0)
-      + (enginesRef.current.rules?.currentRepetition ? 1 : 0)
-    );
+    // rep_id is emitted by the same engine that produces the final session
+    // summary; do not replay these derived features through another engine.
+    setLiveCount((current) => Math.max(current, Number(frame.rep_id) || 0));
+  }, []);
+
+  const handleForecastFrame = useCallback((frame) => {
+    if (!frame || !runRef.current.active) return;
+    const acpEvidence = compactAcpFrameEvidence(frame);
+    if (!acpEvidence) return;
+    forecastFramesRef.current.push({ acpEvidence });
+    if (forecastFramesRef.current.length > 18000) {
+      forecastFramesRef.current.splice(0, forecastFramesRef.current.length - 18000);
+    }
+
+    const now = performance.now();
+    if (now - lastForecastUiAtRef.current >= 500) {
+      lastForecastUiAtRef.current = now;
+      setLastForecastEvidence(acpEvidence);
+    }
   }, []);
 
   const selectVideo = useCallback((event) => {
@@ -414,13 +511,16 @@ export default function AdminVideoAnalysis() {
         url: URL.createObjectURL(file)
       };
     });
-    enginesRef.current = {};
     runRef.current.active = false;
     setResults(null);
+    setExcludedRepIds(new Set());
     setIsSessionPopupOpen(false);
     setLiveCount(0);
     lastFrameRef.current = null;
     setLastFrame(null);
+    forecastFramesRef.current = [];
+    setLastForecastEvidence(null);
+    setPredictionStatus({ status: "disabled", ready: false, error: null });
     setIsRunning(false);
     setInputStatus(`Loading video: ${file.name}`);
     setPlayerVersion((version) => version + 1);
@@ -432,24 +532,19 @@ export default function AdminVideoAnalysis() {
 
   const runAnalysis = useCallback(async () => {
     if (!videoFile || !selectedTechnique?.trackingPackage || isRunning) return;
-    const nextEngines = {};
-    const startedAt = 0;
-    nextEngines.rules = new TrackingSessionEngine(selectedTechnique.trackingPackage, {
-      mode: "practice",
-      analysisEngine: "rules"
-    });
-    nextEngines.rules.start(startedAt);
-
-    enginesRef.current = nextEngines;
     runRef.current = {
       active: true,
       frameCount: 0,
-      startedAt: new Date().toISOString()
+      startedAt: new Date().toISOString(),
+      completionStatus: null
     };
     setResults(null);
+    setExcludedRepIds(new Set());
     setLiveCount(0);
     lastFrameRef.current = null;
     setLastFrame(null);
+    forecastFramesRef.current = [];
+    setLastForecastEvidence(null);
     setIsRunning(true);
     setInputStatus("Starting deterministic rule-based analysis…");
 
@@ -458,7 +553,6 @@ export default function AdminVideoAnalysis() {
       if (!started) throw new Error("The video is not ready yet.");
     } catch (error) {
       runRef.current.active = false;
-      enginesRef.current = {};
       setIsRunning(false);
       setInputStatus(error.message || "Unable to start video analysis.");
     }
@@ -466,7 +560,6 @@ export default function AdminVideoAnalysis() {
 
   const stopAnalysis = useCallback(() => {
     finalizeRun("Analysis stopped before the video ended.");
-    setPlayerVersion((version) => version + 1);
   }, [finalizeRun]);
 
   const downloadResults = useCallback(() => {
@@ -477,7 +570,7 @@ export default function AdminVideoAnalysis() {
       expectedReps,
       requestedEngine: "rules",
       generatedAt: new Date().toISOString(),
-      results
+      results: { rules: applyRepCorrections(results.rules, excludedRepIds) }
     }, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
@@ -485,7 +578,7 @@ export default function AdminVideoAnalysis() {
     anchor.download = `${videoFile.name.replace(/\.[^.]+$/, "")}-analysis.json`;
     anchor.click();
     URL.revokeObjectURL(url);
-  }, [expectedReps, results, selectedTechnique, videoFile]);
+  }, [excludedRepIds, expectedReps, results, selectedTechnique, videoFile]);
 
   const canRun = Boolean(
     videoFile
@@ -493,8 +586,12 @@ export default function AdminVideoAnalysis() {
     && !isRunning
     && (inputStatus.startsWith("Video ready:") || inputStatus.startsWith("Video finished:") || inputStatus.includes("stopped"))
   );
-  const resultList = [results?.rules].filter(Boolean);
-  const activePopupResult = results?.rules || null;
+  const reviewedRulesResult = useMemo(
+    () => applyRepCorrections(results?.rules || null, excludedRepIds),
+    [excludedRepIds, results?.rules]
+  );
+  const resultList = [reviewedRulesResult].filter(Boolean);
+  const activePopupResult = reviewedRulesResult;
   const activePopupSession = toSessionRecord(
     activePopupResult,
     selectedTechnique?.technique.name,
@@ -507,7 +604,7 @@ export default function AdminVideoAnalysis() {
         <div>
           <p className="eyebrow">Admin analysis</p>
           <h1>Video session analyzer</h1>
-          <p>Upload a session for deterministic movement detection, phase segmentation, and biomechanical scoring.</p>
+          <p>Upload a session for deterministic movement detection and scoring, with ACP-STGAT retained as advisory forecast evidence.</p>
         </div>
         <Link className="btn btn--ghost" to="/admin-studio">Back to Admin Studio</Link>
       </header>
@@ -593,15 +690,18 @@ export default function AdminVideoAnalysis() {
               inputVideoUrl={videoFile.url}
               measurementParts={measurementParts}
               onInputStatus={handleInputStatus}
+              onLandmarkFrame={handleForecastFrame}
+              onPredictionStatus={setPredictionStatus}
               onPracticeVideoController={(controller) => {
                 videoControllerRef.current = controller;
               }}
               onRuleEngineFrameUpdate={handleAnalysisFrame}
+              onRuleEngineSessionComplete={handleRuleEngineSessionComplete}
               performanceMode="quality"
               performanceProfile="admin"
               requiredParts={selectedStep?.angles || []}
               sessionConfig={{ technique_name: selectedTechnique.technique.name, mode: "practice" }}
-              skeletonLayers={{ corrections: true, expected: false, level1: true }}
+              skeletonLayers={{ acp: false, acpFrames: [], corrections: true, expected: false }}
               temporalInferenceMode="rules"
               trackingSessionActive={isRunning}
             />
@@ -612,7 +712,7 @@ export default function AdminVideoAnalysis() {
 
         <aside className="admin-video-analysis__status" aria-live="polite">
           <div><span>Status</span><strong>{inputStatus}</strong></div>
-          <div><span>Engine</span><strong>Deterministic rules</strong></div>
+          <div><span>Engine</span><strong>Deterministic rules · authoritative</strong></div>
           <div><span>Frames</span><strong>{runRef.current.frameCount}</strong></div>
           <div><span>Current phase</span><strong>{lastFrame?.canonical_phase || "--"}</strong></div>
           <div>
@@ -621,14 +721,47 @@ export default function AdminVideoAnalysis() {
               {`${liveCount}/${expectedReps}`}
             </strong>
           </div>
+          <div>
+            <span>ACP forecast</span>
+            <strong>
+              {predictionStatus.error
+                ? `Unavailable: ${predictionStatus.error}`
+                : predictionStatus.ready
+                  ? "Ready · advisory only"
+                  : formatLabel(predictionStatus.status)}
+            </strong>
+          </div>
+          <div>
+            <span>Forecast policy</span>
+            <strong>
+              {lastForecastEvidence
+                ? "L1 1–6 · L2 1–12 · L3 1–30"
+                : "Waiting for reliable pose history"}
+            </strong>
+          </div>
+          <div>
+            <span>Predicted transition</span>
+            <strong>{formatLabel(lastForecastEvidence?.transition?.transition)}</strong>
+          </div>
         </aside>
       </section>
 
       {results ? (
         <section className="admin-video-analysis__completed-analysis">
           <div className="admin-video-analysis__results">
-            <AnalysisResultCard expectedReps={expectedReps} result={results.rules} title="Production analysis" />
+            <AnalysisResultCard expectedReps={expectedReps} result={reviewedRulesResult} title="Production analysis" />
           </div>
+
+          <RepCorrectionPanel
+            excludedRepIds={excludedRepIds}
+            onToggle={(repId) => setExcludedRepIds((current) => {
+              const next = new Set(current);
+              if (next.has(repId)) next.delete(repId);
+              else next.add(repId);
+              return next;
+            })}
+            result={results.rules}
+          />
 
           <div className="admin-video-analysis__session-panels">
             {resultList.map((result) => (

@@ -8,20 +8,20 @@ export const STUDIO_MODES = {
   train: {
     label: "Train",
     title: "Steps, targets, and accuracy feedback.",
-    description: "Learn the technique one step at a time with live guidance and form corrections.",
+    description: "Learn one step at a time with observed-pose scoring and short-horizon advisory guidance.",
     action: "Start learning"
   },
   practice: {
     label: "Practice",
     title: "Fixed-count reps, pace, and quality tracking.",
-    description: "Build a set, perform full repetitions, and let session awareness track the sequence.",
+    description: "Build a set and perform full repetitions. Observed movement counts reps while forecasts support awareness.",
     action: "Build a practice set",
     isDefault: true
   },
   analysis: {
     label: "Analysis",
     title: "Recent practice sets and next recommendation.",
-    description: "Review corrected timelines, repetition quality, form errors, and progress.",
+    description: "Review corrected timelines, observed repetition quality, form errors, and saved forecast evidence.",
     action: "Review performance"
   }
 };

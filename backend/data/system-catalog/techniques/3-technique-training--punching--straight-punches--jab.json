@@ -1504,7 +1504,9 @@
             "confirmation": {
               "min_frames": 2,
               "min_ms": 45
-            }
+            },
+            "minimum_guard_excursion": 0.08,
+            "minimum_elbow_extension": 6
           },
           "peak": {
             "type": "direction_reversal",
@@ -1525,9 +1527,9 @@
               "min_ms": 45
             }
           },
-          "minimum_rep_ms": 250,
+          "minimum_rep_ms": 450,
           "maximum_rep_ms": 2400,
-          "minimum_inter_rep_ms": 150
+          "minimum_inter_rep_ms": 50
         },
         "tracking_gap": {
           "maximum_ms": 120,

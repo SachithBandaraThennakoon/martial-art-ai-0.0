@@ -1,37 +1,10 @@
 const formatPercent = (value) =>
   Number.isFinite(value) ? `${Math.round(value * 100)}%` : "--";
 
-const formatError = (value) =>
-  Number.isFinite(value) ? value.toFixed(3) : "--";
-
-const formatAngle = (value) =>
-  Number.isFinite(value) ? `${Math.round(value)} deg` : "--";
-
-function MiniTrend({ values = [], label }) {
-  const chartValues = values.slice(-36);
-  const maxValue = Math.max(...chartValues.filter(Number.isFinite), 0.001);
-
-  return (
-    <div className="level1-trend" aria-label={label}>
-      {chartValues.map((value, index) => (
-        <i
-          key={`${label}-${index}`}
-          style={{
-            height: `${Math.max(8, Math.min(100, (value / maxValue) * 100))}%`
-          }}
-        />
-      ))}
-    </div>
-  );
-}
-
 export default function Level1DebugPanel({ state }) {
-  const metrics = state?.debug?.metrics || {};
   const motion = state?.motion_context || {};
   const tracking = state?.tracking || {};
-  const history = state?.debug?.metricsHistory || [];
-  const positionValues = history.map((entry) => entry.averageJointPositionError);
-  const angleValues = history.map((entry) => entry.averageAngleError).filter(Number.isFinite);
+  const forecast = state?.forecast_context || {};
 
   return (
     <div className="level1-panel">
@@ -52,8 +25,8 @@ export default function Level1DebugPanel({ state }) {
           <strong>{formatPercent(tracking.confidence)}</strong>
         </div>
         <div>
-          <span>Prediction</span>
-          <strong>{formatPercent(motion.prediction_confidence)}</strong>
+          <span>Filter</span>
+          <strong>{motion.filter?.replace(/_/g, " ") || "--"}</strong>
         </div>
         <div>
           <span>Frames</span>
@@ -62,37 +35,10 @@ export default function Level1DebugPanel({ state }) {
       </div>
 
       <div className="level1-metrics">
-        <div>
-          <span>Position error</span>
-          <strong>{formatError(metrics.averageJointPositionError)}</strong>
-        </div>
-        <div>
-          <span>Angle error</span>
-          <strong>{formatAngle(metrics.averageAngleError)}</strong>
-        </div>
-        <div>
-          <span>Wrist</span>
-          <strong>{formatError(metrics.wristError)}</strong>
-        </div>
-        <div>
-          <span>Elbow</span>
-          <strong>{formatError(metrics.elbowError)}</strong>
-        </div>
-        <div>
-          <span>Knee</span>
-          <strong>{formatError(metrics.kneeError)}</strong>
-        </div>
-      </div>
-
-      <div className="level1-charts">
-        <div>
-          <span>Prediction error</span>
-          <MiniTrend label="Position error trend" values={positionValues} />
-        </div>
-        <div>
-          <span>Angle error</span>
-          <MiniTrend label="Angle error trend" values={angleValues} />
-        </div>
+        <div><span>Smoothing</span><strong>{motion.smoothing_alpha ?? "--"}</strong></div>
+        <div><span>Shared forecast</span><strong>{forecast.model_name || "--"}</strong></div>
+        <div><span>Forecast status</span><strong>{forecast.status || "--"}</strong></div>
+        <div><span>Short horizon</span><strong>{forecast.short_horizon_ms ? `${Math.round(forecast.short_horizon_ms)} ms` : "--"}</strong></div>
       </div>
     </div>
   );

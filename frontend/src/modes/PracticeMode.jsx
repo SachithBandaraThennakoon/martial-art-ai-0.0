@@ -64,6 +64,10 @@ import {
   selectLatestPracticeSession,
   sortPracticeSessions
 } from "../utils/practiceSessionSelectors";
+import {
+  buildAcpSessionSummary,
+  compactAcpFrameEvidence
+} from "../temporal/acpSessionSummary";
 
 const COUNT_OPTIONS = [3, 5, 10];
 const GAP_OPTIONS = [
@@ -322,6 +326,7 @@ const encodePracticeTapeFrame = (frame) => ({
         frame.forecastAwareness.horizon_ms ?? null
       ]
     : null,
+  af: frame.acpEvidence || null,
   lr: frame.liveRep,
   ls: frame.liveStep,
   lph: frame.livePhase,
@@ -423,6 +428,7 @@ const decodePracticeTapeFrame = (frame, index) => ({
         horizon_ms: frame.fa[6] ?? null
       }
     : null,
+  acpEvidence: frame.af || null,
   liveRep: frame.lr ?? null,
   liveStep: frame.ls ?? null,
   livePhase: frame.lph || null,
@@ -1017,6 +1023,7 @@ export default function PracticeMode({
   const [videoPersistenceStatus, setVideoPersistenceStatus] = useState("idle");
   const [uploadedVideoReady, setUploadedVideoReady] = useState(false);
   const quickVideoStartedRef = useRef(false);
+  const uploadedAnalysisTimingRef = useRef({ startedAtMs: null, durationMs: 0 });
   const ruleEngineResultRef = useRef(null);
   const ruleEngineWaitersRef = useRef(new Set());
   const handleRuleEngineSessionComplete = useCallback((summary) => {
@@ -1230,7 +1237,10 @@ export default function PracticeMode({
             ? "completed"
             : "incomplete",
         mode: "practice",
-        analytics: correctedRuleSummary
+        analytics: {
+          ...correctedRuleSummary,
+          forecast_summary: analysisTapeMetadata?.acpForecastSummary || null
+        }
       }
     : null;
   const canonicalSessionAnalysis = useMemo(
@@ -2463,6 +2473,7 @@ export default function PracticeMode({
           completionStatus: completed ? "completed" : "incomplete",
           completedReps: correctedCompletedReps,
           correctedSummary,
+          acpForecastSummary: buildAcpSessionSummary(recordedFramesRef.current),
           captureWindow: {
             startedAt: "start_button",
             classificationArmedAtElapsedMs:
@@ -2578,7 +2589,13 @@ export default function PracticeMode({
           scheduleStartedAtMs: countScheduleStartedAtRef.current,
           cueNumber: targetReps + 1,
           countGapMs
-        }) + PRACTICE_FINAL_ANALYSIS_GRACE_MS - performance.now()
+        }) + PRACTICE_FINAL_ANALYSIS_GRACE_MS - performance.now(),
+        inputSource === "video" && Number.isFinite(uploadedAnalysisTimingRef.current.startedAtMs)
+          ? uploadedAnalysisTimingRef.current.startedAtMs
+            + uploadedAnalysisTimingRef.current.durationMs
+            + PRACTICE_FINAL_ANALYSIS_GRACE_MS
+            - performance.now()
+          : 0
       ));
       countBeatTimersRef.current = [finalResponseTimerId];
     }
@@ -2691,6 +2708,11 @@ export default function PracticeMode({
               horizon_ms: holisticFrame.forecastAwareness.horizon_ms ?? null
             }
           : null,
+        acpEvidence: compactAcpFrameEvidence({
+          acpForecast: holisticFrame.acpForecast,
+          forecastAwareness: holisticFrame.forecastAwareness,
+          predictedTransition: holisticFrame.predictedTransition
+        }),
         motionScore: Math.max(holisticFrame.motionEnergy || 0, poseMotion * 10)
       });
     };
@@ -2741,6 +2763,7 @@ export default function PracticeMode({
     repCountRef.current = 0;
     cueCountRef.current = 0;
     countScheduleStartedAtRef.current = null;
+    uploadedAnalysisTimingRef.current = { startedAtMs: null, durationMs: 0 };
     classificationArmedAtElapsedMsRef.current = 0;
     // The diagnostic recorder starts at the button press, but movement
     // classification is deliberately unarmed until spoken setup has ended.
@@ -2854,9 +2877,6 @@ export default function PracticeMode({
     );
     practiceVideoCaptureOffsetMsRef.current =
       classificationArmedAtElapsedMsRef.current;
-    if (inputSource === "video") {
-      await practiceVideoControllerRef.current?.restartUploaded?.();
-    }
     if (
       inputSource === "live" &&
       currentTechnique?.name?.trim().toLowerCase() === "jab"
@@ -2875,6 +2895,18 @@ export default function PracticeMode({
     }
     setIsReadyForRep(true);
     isReadyForRepRef.current = true;
+    if (inputSource === "video") {
+      const uploadStartedAtMs = performance.now();
+      const uploaded = await practiceVideoControllerRef.current?.restartUploaded?.();
+      if (!uploaded) {
+        setAssistantMessage("The uploaded video is not ready. Choose it again and retry.");
+        return;
+      }
+      uploadedAnalysisTimingRef.current = {
+        startedAtMs: uploadStartedAtMs,
+        durationMs: Number(uploaded.durationMs) || 0
+      };
+    }
     countBeatRef.current?.();
   }, [
     beginWholeSessionCapture,
@@ -3443,6 +3475,8 @@ export default function PracticeMode({
           inputSource={inputSource}
           inputVideoUrl={inputVideoUrl}
           inputVideoName={inputVideoName}
+          uploadedPlaybackMode="realtime"
+          uploadedPlaybackRate={1}
           onInputStatus={handleInputStatus}
           onPredictionStatus={onPredictionStatus}
           temporalInferenceMode={analysisEngine}

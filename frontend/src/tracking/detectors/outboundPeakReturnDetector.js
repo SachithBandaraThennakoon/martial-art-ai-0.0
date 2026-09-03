@@ -64,6 +64,7 @@ export class OutboundPeakReturnDetector {
     this.startCandidate = null;
     this.readyCandidate = null;
     this.armed = !this.config.ready;
+    this.readyFeatures = null;
     this.peakCandidate = null;
     this.returnCandidate = null;
     this.active = null;
@@ -116,8 +117,37 @@ export class OutboundPeakReturnDetector {
           timestampMs
         )) {
           this.armed = true;
+          this.readyFeatures = {
+            guardDistance: Number(
+              detectorFeatures.lead_wrist_guard_distance
+            ),
+            elbowAngle: Number(detectorFeatures.lead_elbow_angle)
+          };
           this.readyCandidate = null;
           events.push({ type: "READY_CONFIRMED", timestamp_ms: timestampMs });
+        }
+      }
+      if (this.armed && this.config.ready) {
+        const readyMatch = evaluateRule(
+          this.config.ready,
+          detectorFeatures,
+          { previousFeatures: this.previousFeatures }
+        );
+        const guardDistance = Number(
+          detectorFeatures.lead_wrist_guard_distance
+        );
+        if (
+          readyMatch.satisfied &&
+          Number.isFinite(guardDistance) &&
+          (
+            !Number.isFinite(this.readyFeatures?.guardDistance) ||
+            guardDistance < this.readyFeatures.guardDistance
+          )
+        ) {
+          this.readyFeatures = {
+            guardDistance,
+            elbowAngle: Number(detectorFeatures.lead_elbow_angle)
+          };
         }
       }
       const sinceLast = Number.isFinite(this.lastCompletedAtMs)
@@ -128,10 +158,32 @@ export class OutboundPeakReturnDetector {
         detectorFeatures,
         { previousFeatures: this.previousFeatures }
       );
+      const guardExcursion =
+        Number(detectorFeatures.lead_wrist_guard_distance) -
+        Number(this.readyFeatures?.guardDistance);
+      const elbowExtension =
+        Number(detectorFeatures.lead_elbow_angle) -
+        Number(this.readyFeatures?.elbowAngle);
+      const hasRequiredExcursion =
+        (
+          !Number.isFinite(Number(this.config.start.minimum_guard_excursion)) ||
+          (
+            Number.isFinite(guardExcursion) &&
+            guardExcursion >= Number(this.config.start.minimum_guard_excursion)
+          )
+        ) &&
+        (
+          !Number.isFinite(Number(this.config.start.minimum_elbow_extension)) ||
+          (
+            Number.isFinite(elbowExtension) &&
+            elbowExtension >= Number(this.config.start.minimum_elbow_extension)
+          )
+        );
       this.startCandidate = updateCandidate(
         this.startCandidate,
         this.armed
           && startMatch.satisfied
+          && hasRequiredExcursion
           && sinceLast >= this.config.minimum_inter_rep_ms,
         timestampMs
       );
@@ -193,7 +245,16 @@ export class OutboundPeakReturnDetector {
         events.push({ type: "REP_END", timestamp_ms: timestampMs });
         this.lastCompletedAtMs = timestampMs;
         this.state = "READY";
+        // A completed return already passed the configured guard confirmation.
+        // Keep that observed guard as the baseline for a chained next punch;
+        // otherwise a jab that begins on the very next sampled frame is lost
+        // while the detector waits to arm itself a second time.
         this.armed = true;
+        this.readyFeatures = {
+          guardDistance: Number(detectorFeatures.lead_wrist_guard_distance),
+          elbowAngle: Number(detectorFeatures.lead_elbow_angle)
+        };
+        this.readyCandidate = null;
         this.returnCandidate = null;
       }
     }

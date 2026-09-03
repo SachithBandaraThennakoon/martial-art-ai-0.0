@@ -12,7 +12,7 @@ const pose = (x) => [
   { x: x + 0.1, y: x + 0.2, z: 0, visibility: 1 }
 ];
 
-test("Level 1 emits separate +1, +2 and +3 forecast frames", () => {
+test("Level 1 filters motion without emitting a local forecast", () => {
   const layer = new Level1MotionLayer();
   const landmarks = Array.from({ length: 33 }, (_, index) => ({
     x: 0.3 + index * 0.001,
@@ -27,31 +27,16 @@ test("Level 1 emits separate +1, +2 and +3 forecast frames", () => {
     1000 + 1000 / 30
   );
 
-  assert.deepEqual(
-    state.debug.predictedFrames.map((frame) => frame.horizonFrame),
-    [1, 2, 3]
-  );
-  assert.deepEqual(
-    state.debug.predictedFrames.map((frame) => Math.round(frame.horizonMs)),
-    [33, 67, 100]
-  );
+  assert.equal(state.motion_context.filter, "body_normalized_ema");
+  assert.equal(state.motion_context.predicted_landmarks, undefined);
+  assert.equal(state.debug.predictedFrames, undefined);
 });
 
-test("one target frame aggregates three Level 1 and thirty Level 2 forecasts", () => {
+test("one target frame aggregates only the first six Level 2 forecasts", () => {
   const ledger = new PredictionLedger();
   const targetTimestampMs = 3000;
 
-  for (let horizonFrame = 1; horizonFrame <= 3; horizonFrame += 1) {
-    ledger.addForecast({
-      model: "level1",
-      originTimestampMs: targetTimestampMs - horizonFrame * (1000 / 30),
-      targetTimestampMs,
-      horizonFrame,
-      landmarks: pose(0.5),
-      confidence: 0.9
-    });
-  }
-  for (let horizonFrame = 1; horizonFrame <= 30; horizonFrame += 1) {
+  for (let horizonFrame = 1; horizonFrame <= 6; horizonFrame += 1) {
     ledger.addForecast({
       model: "level2",
       originTimestampMs: targetTimestampMs - horizonFrame * (1000 / 30),
@@ -70,11 +55,11 @@ test("one target frame aggregates three Level 1 and thirty Level 2 forecasts", (
 
   assert.deepEqual(result.sourceCounts, {
     observed: 1,
-    level1: 3,
-    level2: 30,
-    total: 34
+    level1: 0,
+    level2: 6,
+    total: 7
   });
-  assert.equal(result.forecasts.length, 33);
+  assert.equal(result.forecasts.length, 6);
   assert.equal(result.usePredictionFallback, false);
   assert.ok(result.aggregateLandmarks[0].x > 0.49);
   assert.ok(result.aggregateLandmarks[0].x < 0.51);

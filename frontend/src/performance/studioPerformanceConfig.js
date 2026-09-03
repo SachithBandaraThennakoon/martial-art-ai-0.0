@@ -13,7 +13,7 @@ export const STUDIO_PERFORMANCE_PROFILES = {
     awarenessIntervalMs: 380,
     coachFrameIntervalMs: 320,
     coachContextIntervalMs: 3000,
-    onnxIntervalMs: 1200,
+    onnxIntervalMs: 180,
     enableFace: false,
     handMode: "auto",
     onnxEnabled: false
@@ -32,7 +32,7 @@ export const STUDIO_PERFORMANCE_PROFILES = {
     awarenessIntervalMs: 450,
     coachFrameIntervalMs: 380,
     coachContextIntervalMs: 3500,
-    onnxIntervalMs: 1400,
+    onnxIntervalMs: 180,
     enableFace: false,
     handMode: "auto",
     onnxEnabled: false
@@ -51,7 +51,7 @@ export const STUDIO_PERFORMANCE_PROFILES = {
     awarenessIntervalMs: 360,
     coachFrameIntervalMs: 320,
     coachContextIntervalMs: 2800,
-    onnxIntervalMs: 900,
+    onnxIntervalMs: 180,
     enableFace: true,
     handMode: "auto",
     onnxEnabled: true

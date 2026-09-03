@@ -22,7 +22,7 @@ const metric = (value, suffix = "") =>
   value === null || value === undefined ? "--" : `${value}${suffix}`;
 
 const percentage = (value) =>
-  Number.isFinite(Number(value))
+  value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))
     ? Number((Number(value) * 100).toFixed(1))
     : null;
 
@@ -66,6 +66,7 @@ export default function SessionAnalysisPanel({
   const formErrors =
     analytics.common_form_errors ?? session.form_errors ?? [];
   const stepDurations = analytics.per_step_duration_ms || {};
+  const forecastSummary = analytics.forecast_summary || session.forecast_summary || null;
   const timestamp = session.ended_at || session.started_at;
 
   return (
@@ -141,6 +142,33 @@ export default function SessionAnalysisPanel({
             <p>Step timing is unavailable for this session.</p>
           )}
         </div>
+        {forecastSummary ? (
+          <div>
+            <span>ACP-STGAT forecast evidence</span>
+            <ul>
+              <li>
+                <strong>{metric(forecastSummary.coverage_percentage, "%")} coverage</strong>
+                <small>{forecastSummary.forecast_samples || 0} usable forecast samples</small>
+              </li>
+              <li>
+                <strong>{formatLabel(forecastSummary.dominant_intent)}</strong>
+                <small>Dominant predicted intent</small>
+              </li>
+              <li>
+                <strong>{formatLabel(forecastSummary.dominant_transition)}</strong>
+                <small>Session transition candidate</small>
+              </li>
+              <li>
+                <strong>
+                  L1 {metric(percentage(forecastSummary.band_reliability?.level1), "%")}
+                  {" · "}
+                  L3 {metric(percentage(forecastSummary.band_reliability?.level3), "%")}
+                </strong>
+                <small>Advisory only · never changes repetition counts</small>
+              </li>
+            </ul>
+          </div>
+        ) : null}
       </div>
     </section>
   );

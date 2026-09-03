@@ -80,6 +80,17 @@ test("smaller but meaningful outbound motion remains a detected attempt", () => 
   assert.equal(events.filter((event) => event.type === "REP_END").length, 1);
 });
 
+test("a short direction reversal cannot complete a Jab practice repetition", () => {
+  const detector = new OutboundPeakReturnDetector({
+    ...detectorConfig,
+    minimum_rep_ms: 450
+  });
+  const events = feed(detector, oneRep());
+
+  assert.equal(events.some((event) => event.type === "REP_START"), true);
+  assert.equal(events.some((event) => event.type === "REP_END"), false);
+});
+
 test("small noisy movement is not a repetition", () => {
   const events = feed(createDetector(), [
     [0, frame(0.02, 3, 0.31)],
@@ -165,4 +176,52 @@ test("timestamp-based confirmation produces the same rep at 15 and 30 fps", () =
     { starts: 1, ends: 1 },
     { starts: 1, ends: 1 }
   ]);
+});
+
+test("a completed Jab must settle in guard before a new extension can start", () => {
+  const detector = new OutboundPeakReturnDetector({
+    ...detectorConfig,
+    ready: {
+      feature: "lead_wrist_guard_distance",
+      operator: "lte",
+      value: 0.65,
+      confirmation: { min_frames: 2, min_ms: 40 }
+    },
+    start: {
+      ...detectorConfig.start,
+      minimum_guard_excursion: 0.08,
+      minimum_elbow_extension: 6
+    }
+  });
+  const sample = (axis, elbowVelocity, guard, elbowAngle) => ({
+    ...frame(axis, elbowVelocity, guard),
+    lead_wrist_guard_distance: guard,
+    lead_elbow_angle: elbowAngle
+  });
+  const events = feed(detector, [
+    [0, sample(0, 0, 0.4, 100)],
+    [50, sample(0, 0, 0.4, 100)],
+    [150, sample(0.4, 60, 0.6, 115)],
+    [200, sample(0.5, 70, 0.85, 140)],
+    [280, sample(-0.15, -40, 0.9, 145)],
+    [400, sample(-0.25, -60, 0.58, 120)],
+    [450, sample(-0.08, -20, 0.42, 105)],
+    // Immediate retraction bounce: not enough stable guard time to re-arm.
+    [500, sample(0, 0, 0.4, 103)],
+    [550, sample(0.35, 40, 0.58, 110)],
+    [650, sample(0, 0, 0.4, 102)],
+    [700, sample(0, 0, 0.4, 102)],
+    // Stable-guard jitter lacks meaningful displacement and elbow extension.
+    [800, sample(0.3, 35, 0.43, 104)],
+    [850, sample(0.32, 38, 0.44, 105)],
+    // A real second extension still counts.
+    [1100, sample(0.4, 60, 0.62, 116)],
+    [1150, sample(0.5, 70, 0.9, 142)],
+    [1230, sample(-0.15, -40, 0.92, 145)],
+    [1360, sample(-0.25, -60, 0.58, 120)],
+    [1410, sample(-0.08, -20, 0.42, 105)]
+  ]);
+
+  assert.equal(events.filter((event) => event.type === "REP_START").length, 2);
+  assert.equal(events.filter((event) => event.type === "REP_END").length, 2);
 });

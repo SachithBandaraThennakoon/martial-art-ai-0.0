@@ -43,8 +43,13 @@ export default function TrainingStudio({ analysisPreview = false, studioMode = "
     return STUDIO_PERFORMANCE_MODES[storedMode] ? storedMode : "auto";
   });
   const [skeletonLayers, setSkeletonLayers] = useState({
-    level1: false,
-    level2: false
+    acp: false,
+    acpFrames: [1, 3, 6]
+  });
+  const [adminPredictionStatus, setAdminPredictionStatus] = useState({
+    status: "disabled",
+    ready: false,
+    error: null
   });
   const importedAdminVideo = isAdminStudio
     ? location.state?.adminPracticeUpload || null
@@ -128,6 +133,17 @@ export default function TrainingStudio({ analysisPreview = false, studioMode = "
       ...currentLayers,
       [layer]: !currentLayers[layer]
     }));
+  };
+
+  const toggleAcpFrame = (frameNumber) => {
+    setSkeletonLayers((currentLayers) => {
+      const selectedFrames = currentLayers.acpFrames || [];
+      const acpFrames = selectedFrames.includes(frameNumber)
+        ? selectedFrames.filter((value) => value !== frameNumber)
+        : [...selectedFrames, frameNumber].sort((first, second) => first - second);
+
+      return { ...currentLayers, acpFrames };
+    });
   };
 
   const updateStanceTarget = (degrees) => {
@@ -356,21 +372,79 @@ export default function TrainingStudio({ analysisPreview = false, studioMode = "
         {isAdminStudio && !['analysis', 'guide'].includes(mode) ? (
           <div className="coach-toggles coach-toggles--skeleton" aria-label="Skeleton layers">
             <button
-              aria-pressed={activeSkeletonLayers.level1}
-              className={`coach-toggle-button ${activeSkeletonLayers.level1 ? "is-active" : ""}`}
-              onClick={() => toggleSkeletonLayer("level1")}
+              aria-pressed={activeSkeletonLayers.acp}
+              className={`coach-toggle-button ${activeSkeletonLayers.acp ? "is-active" : ""}`}
+              onClick={() => toggleSkeletonLayer("acp")}
               type="button"
             >
-              Yellow L1 {activeSkeletonLayers.level1 ? "On" : "Off"}
+              ACP forecasts {activeSkeletonLayers.acp ? "On" : "Off"}
             </button>
-            <button
-              aria-pressed={activeSkeletonLayers.level2}
-              className={`coach-toggle-button coach-toggle-button--level2 ${activeSkeletonLayers.level2 ? "is-active" : ""}`}
-              onClick={() => toggleSkeletonLayer("level2")}
-              type="button"
-            >
-              Blue L2 {activeSkeletonLayers.level2 ? "On" : "Off"}
-            </button>
+            {activeSkeletonLayers.acp ? (
+              <>
+                <small className={adminPredictionStatus.error ? "is-low" : ""}>
+                  {adminPredictionStatus.error
+                    ? `Model error: ${adminPredictionStatus.error}`
+                    : adminPredictionStatus.ready
+                      ? `Ready · ${activeSkeletonLayers.acpFrames.length} selected`
+                      : `Model ${adminPredictionStatus.status || "loading"}`}
+                </small>
+                <details className="acp-frame-picker">
+                  <summary>
+                    Select frames ({activeSkeletonLayers.acpFrames.length})
+                  </summary>
+                  <div className="acp-frame-picker__tiles" aria-label="ACP forecast frames">
+                    {Array.from({ length: 30 }, (_, index) => index + 1).map((frameNumber) => {
+                      const selected = activeSkeletonLayers.acpFrames.includes(frameNumber);
+                      return (
+                        <button
+                          aria-label={`Forecast frame ${frameNumber}, ${Math.round(frameNumber * 1000 / 30)} milliseconds`}
+                          aria-pressed={selected}
+                          className={selected ? "is-selected" : ""}
+                          key={frameNumber}
+                          onClick={() => toggleAcpFrame(frameNumber)}
+                          style={{
+                            "--frame-color": `hsl(${Math.round(220 * (1 - (frameNumber - 1) / 29))} 94% 61%)`
+                          }}
+                          title={`${Math.round(frameNumber * 1000 / 30)} ms ahead`}
+                          type="button"
+                        >
+                          {frameNumber}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="acp-frame-picker__actions">
+                    <button
+                      onClick={() => setSkeletonLayers((current) => ({
+                        ...current,
+                        acpFrames: Array.from({ length: 30 }, (_, index) => index + 1)
+                      }))}
+                      type="button"
+                    >
+                      Select all
+                    </button>
+                    <button
+                      onClick={() => setSkeletonLayers((current) => ({
+                        ...current,
+                        acpFrames: [1, 3, 6]
+                      }))}
+                      type="button"
+                    >
+                      Short 1/3/6
+                    </button>
+                    <button
+                      onClick={() => setSkeletonLayers((current) => ({
+                        ...current,
+                        acpFrames: []
+                      }))}
+                      type="button"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </details>
+              </>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -401,6 +475,7 @@ export default function TrainingStudio({ analysisPreview = false, studioMode = "
           inputVideoUrl={adminVideo?.url || null}
           inputVideoName={adminVideo?.name || null}
           onInputStatus={setAdminInputStatus}
+          onPredictionStatus={setAdminPredictionStatus}
           analysisEngine={isAdminStudio ? adminAnalysisEngine : "auto"}
           autoStartVideoAnalysis={Boolean(importedAdminVideo)}
           initialTargetReps={importedAdminVideo?.targetReps}
@@ -424,6 +499,7 @@ export default function TrainingStudio({ analysisPreview = false, studioMode = "
           inputVideoUrl={adminVideo?.url || null}
           inputVideoName={adminVideo?.name || null}
           onInputStatus={setAdminInputStatus}
+          onPredictionStatus={setAdminPredictionStatus}
           analysisEngine={isAdminStudio ? adminAnalysisEngine : "auto"}
         />
       ) : (

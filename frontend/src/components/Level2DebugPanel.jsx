@@ -16,6 +16,7 @@ function MiniProgress({ value = 0, tone = "neutral" }) {
 export default function Level2DebugPanel({ state }) {
   const action = state?.action_context || {};
   const attention = action.attention_prediction || {};
+  const forecastBand = attention.forecast_band || null;
   const mistake = action.likely_mistake;
   const isReady = state?.ready_for_situation_awareness;
 
@@ -80,7 +81,14 @@ export default function Level2DebugPanel({ state }) {
           {attention.source ? `${attention.source} / ` : ""}
           {attention.status || "Waiting for action context"}
         </small>
-        <small>Bone color: {attention.source === "onnx" ? "green" : "none"}</small>
+        <small>
+          Forecast band: {forecastBand
+            ? `frames ${forecastBand.start_frame}-${forecastBand.end_frame}`
+            : "unavailable"}
+        </small>
+        <small>
+          Predicted intent: {formatLabel(forecastBand?.trajectory?.intent)}
+        </small>
         <small>ONNX status: {attention.onnx_status || "unknown"}</small>
         {attention.onnx_error ? <small>{attention.onnx_error}</small> : null}
         {attention.error ? <small>{attention.error}</small> : null}

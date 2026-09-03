@@ -1,14 +1,9 @@
 const DEFAULT_CONFIG = {
   fpsWindow: 20,
   historyWindowMs: 1000,
-  predictionHorizonMs: 100,
-  predictionFrameCount: 3,
   smoothingAlpha: 0.62,
-  positionErrorThreshold: 0.065,
-  angleErrorThresholdDeg: 10,
   confidenceThreshold: 0.75,
-  minFps: 20,
-  predictionMatchToleranceMs: 70
+  minFps: 20
 };
 
 export const LEVEL1_KEY_JOINTS = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28, 31, 32];
@@ -178,8 +173,6 @@ export class Level1MotionLayer {
   constructor(config = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.frames = [];
-    this.pendingPredictions = [];
-    this.metricsHistory = [];
     this.frameIntervals = [];
     this.previousFrame = null;
     this.previousSmoothed = null;
@@ -200,44 +193,6 @@ export class Level1MotionLayer {
       : 0;
     const velocity = calculateDerivative(smoothed, this.previousFrame?.normalized, deltaSeconds);
     const acceleration = calculateDerivative(velocity, this.previousFrame?.velocity, deltaSeconds);
-    const predictionFrameCount = Math.max(1, this.config.predictionFrameCount);
-    const predictedFrames = Array.from(
-      { length: predictionFrameCount },
-      (_, frameIndex) => {
-        const horizonFrame = frameIndex + 1;
-        const horizonMs =
-          (this.config.predictionHorizonMs * horizonFrame) / predictionFrameCount;
-        const horizonSeconds = horizonMs / 1000;
-        const predictedNormalized = smoothed.map((point, index) => ({
-          x:
-            point.x +
-            velocity[index].x * horizonSeconds +
-            0.5 * acceleration[index].x * horizonSeconds ** 2,
-          y:
-            point.y +
-            velocity[index].y * horizonSeconds +
-            0.5 * acceleration[index].y * horizonSeconds ** 2,
-          z:
-            (point.z || 0) +
-            velocity[index].z * horizonSeconds +
-            0.5 * acceleration[index].z * horizonSeconds ** 2,
-          visibility: point.visibility
-        }));
-        const landmarks = denormalizeLandmarks(predictedNormalized, transform);
-
-        return {
-          timestamp: timestampMs,
-          targetTimestamp: timestampMs + horizonMs,
-          horizonFrame,
-          horizonMs,
-          landmarks,
-          normalized: predictedNormalized,
-          angles: calculateAngles(landmarks)
-        };
-      }
-    );
-    const prediction = predictedFrames[predictedFrames.length - 1];
-    const predictedLandmarks = prediction.landmarks;
     const smoothedLandmarks = denormalizeLandmarks(smoothed, transform);
     const trackingConfidence = average(rawLandmarks.map(confidenceOf)) || 0;
     const angles = calculateAngles(smoothedLandmarks);
@@ -246,17 +201,10 @@ export class Level1MotionLayer {
       this.frameIntervals = this.frameIntervals.slice(-this.config.fpsWindow);
     }
 
-    const accuracy = this.measurePredictionAccuracy(timestampMs, smoothedLandmarks, angles);
     const fps = this.getFps();
     const readyForNextLayer =
       trackingConfidence >= this.config.confidenceThreshold &&
-      fps >= this.config.minFps &&
-      (!accuracy ||
-        (
-          accuracy.averageJointPositionError <= this.config.positionErrorThreshold &&
-          (!Number.isFinite(accuracy.averageAngleError) ||
-            accuracy.averageAngleError <= this.config.angleErrorThresholdDeg)
-        ));
+      fps >= this.config.minFps;
 
     const frameState = {
       timestamp: timestampMs,
@@ -273,10 +221,6 @@ export class Level1MotionLayer {
     this.frames = this.frames.filter(
       (frame) => timestampMs - frame.timestamp <= this.config.historyWindowMs
     );
-    this.pendingPredictions.push(...predictedFrames);
-    this.pendingPredictions = this.pendingPredictions.filter(
-      (item) => item.targetTimestamp >= timestampMs - this.config.predictionMatchToleranceMs
-    );
     this.previousFrame = frameState;
     this.previousSmoothed = smoothed;
 
@@ -284,13 +228,12 @@ export class Level1MotionLayer {
       timestamp: timestampMs / 1000,
       motion_context: {
         window_ms: this.config.historyWindowMs,
-        prediction_horizon_ms: this.config.predictionHorizonMs,
+        filter: "body_normalized_ema",
+        smoothing_alpha: this.config.smoothingAlpha,
         normalized_landmarks: compactLandmarks(smoothed),
         angles_deg: angles,
         velocity: selectKeyed(velocity),
-        acceleration: selectKeyed(acceleration),
-        predicted_landmarks: compactLandmarks(predictedLandmarks),
-        prediction_confidence: this.getPredictionConfidence(accuracy, trackingConfidence)
+        acceleration: selectKeyed(acceleration)
       },
       tracking: {
         confidence: trackingConfidence,
@@ -299,14 +242,10 @@ export class Level1MotionLayer {
       },
       debug: {
         currentLandmarks: smoothedLandmarks,
-        predictedLandmarks,
-        predictedFrames,
         trailLandmarks: this.frames
           .filter((_, index) => index % 4 === 0)
           .slice(-8)
-          .map((frame) => frame.landmarks),
-        metrics: accuracy,
-        metricsHistory: this.metricsHistory.slice(-80)
+          .map((frame) => frame.landmarks)
       },
       ready_for_next_layer: readyForNextLayer
     };
@@ -317,54 +256,4 @@ export class Level1MotionLayer {
     return interval ? Math.round(1000 / interval) : 0;
   }
 
-  getPredictionConfidence(accuracy, trackingConfidence) {
-    if (!accuracy) return trackingConfidence;
-
-    const positionScore = Math.max(
-      0,
-      1 - accuracy.averageJointPositionError / this.config.positionErrorThreshold
-    );
-    const angleScore = Number.isFinite(accuracy.averageAngleError)
-      ? Math.max(0, 1 - accuracy.averageAngleError / this.config.angleErrorThresholdDeg)
-      : trackingConfidence;
-
-    return Number(((trackingConfidence + positionScore + angleScore) / 3).toFixed(3));
-  }
-
-  measurePredictionAccuracy(timestampMs, actualLandmarks, actualAngles) {
-    const matchIndex = this.pendingPredictions.findIndex(
-      (prediction) =>
-        Math.abs(prediction.targetTimestamp - timestampMs) <=
-        this.config.predictionMatchToleranceMs
-    );
-
-    if (matchIndex === -1) {
-      return this.metricsHistory[this.metricsHistory.length - 1] || null;
-    }
-
-    const [prediction] = this.pendingPredictions.splice(matchIndex, 1);
-    const keyErrors = LEVEL1_KEY_JOINTS.map((index) =>
-      distance(prediction.landmarks[index], actualLandmarks[index])
-    );
-    const angleErrors = Object.entries(actualAngles)
-      .map(([name, actual]) => {
-        const predicted = prediction.angles[name];
-        return Number.isFinite(predicted) ? Math.abs(predicted - actual) : null;
-      })
-      .filter(Number.isFinite);
-    const jointError = (index) => distance(prediction.landmarks[index], actualLandmarks[index]);
-    const metrics = {
-      timestamp: timestampMs / 1000,
-      averageJointPositionError: average(keyErrors) || 0,
-      averageAngleError: average(angleErrors),
-      wristError: average([jointError(15), jointError(16)]) || 0,
-      elbowError: average([jointError(13), jointError(14)]) || 0,
-      kneeError: average([jointError(25), jointError(26)]) || 0
-    };
-
-    this.metricsHistory.push(metrics);
-    this.metricsHistory = this.metricsHistory.slice(-180);
-
-    return metrics;
-  }
 }

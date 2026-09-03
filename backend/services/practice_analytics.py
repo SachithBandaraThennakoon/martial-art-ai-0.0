@@ -2,7 +2,7 @@ import json
 import zlib
 
 
-ANALYTICS_SCHEMA_VERSION = 5
+ANALYTICS_SCHEMA_VERSION = 6
 
 
 def _number(value, default=0):
@@ -15,6 +15,51 @@ def _number(value, default=0):
 
 def _integer(value, default=0):
     return int(round(_number(value, default)))
+
+
+def _acp_forecast_summary(metadata):
+    source = metadata.get("acpForecastSummary")
+    if not isinstance(source, dict):
+        return None
+
+    reliability = source.get("band_reliability")
+    reliability = reliability if isinstance(reliability, dict) else {}
+    return {
+        "model_name": str(source.get("model_name") or "ACP-STGAT")[:80],
+        "role": "advisory_only",
+        "affects_rep_count": False,
+        "observed_samples": max(0, _integer(source.get("observed_samples"))),
+        "forecast_samples": max(0, _integer(source.get("forecast_samples"))),
+        "coverage_percentage": max(
+            0, min(100, round(_number(source.get("coverage_percentage")), 1))
+        ),
+        "bands": {
+            "level1": "frames 1-6",
+            "level2": "frames 1-12",
+            "awareness": "frames 4-12",
+            "level3": "frames 1-30",
+        },
+        "band_reliability": {
+            name: (
+                max(0, min(1, round(_number(reliability.get(name)), 3)))
+                if reliability.get(name) is not None else None
+            )
+            for name in ("level1", "level2", "awareness", "level3")
+        },
+        "dominant_intent": str(source.get("dominant_intent") or "unavailable")[:80],
+        "dominant_transition": str(
+            source.get("dominant_transition") or "unavailable"
+        )[:80],
+        "transition_candidates": max(
+            0, _integer(source.get("transition_candidates"))
+        ),
+        "trusted_warning_samples": max(
+            0, _integer(source.get("trusted_warning_samples"))
+        ),
+        "peak_warning_risk": max(
+            0, min(1, round(_number(source.get("peak_warning_risk")), 3))
+        ),
+    }
 
 
 def extract_practice_analytics(metadata):
@@ -169,6 +214,7 @@ def extract_practice_analytics(metadata):
         "capture_duration_ms": max(
             0, _integer(metadata.get("captureDurationMs"))
         ),
+        "forecast_summary": _acp_forecast_summary(metadata),
     }
 
 

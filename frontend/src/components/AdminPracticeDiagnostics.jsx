@@ -62,6 +62,8 @@ export default function AdminPracticeDiagnostics({
   ) || {};
   const action = level2State?.action_context || {};
   const session = level3State?.session_context || {};
+  const sharedForecast = session.shared_forecast || {};
+  const predictedTransition = session.predicted_transition || {};
   const situation = situationAwarenessState?.situation_context || {};
   const activeRuleEvidence = (frame?.rule_evidence || []).find(
     (item) => item.state === frame?.step
@@ -168,6 +170,10 @@ export default function AdminPracticeDiagnostics({
             <dl className="admin-live-diagnostics__awareness">
               <div><dt>Session state</dt><dd>{label(session.session_state)}</dd></div>
               <div><dt>Session phase</dt><dd>{label(session.temporal_phase)}</dd></div>
+              <div><dt>ACP intent</dt><dd>{label(sharedForecast.predicted_intent)}</dd></div>
+              <div><dt>ACP horizon</dt><dd>{sharedForecast.horizon_ms ? `${Math.round(sharedForecast.horizon_ms)} ms` : "--"}</dd></div>
+              <div><dt>Predicted transition</dt><dd>{label(predictedTransition.transition)}</dd></div>
+              <div><dt>Forecast authority</dt><dd>Advisory only</dd></div>
               <div><dt>Situation</dt><dd>{label(situation.situation_state)}</dd></div>
               <div><dt>Attention</dt><dd>{label(situation.attention_target?.body_part || situation.attention_target?.layer)}</dd></div>
               <div><dt>Decision</dt><dd>{label(situation.feedback_decision?.action)}</dd></div>

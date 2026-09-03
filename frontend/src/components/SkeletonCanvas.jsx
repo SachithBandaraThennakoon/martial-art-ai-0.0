@@ -16,6 +16,7 @@ import {
 import { calculateAngle as calculateImageAngle } from "../utils/calculateAngle";
 import { Level1MotionLayer } from "../temporal/level1MotionLayer";
 import { Level2ActionLayer } from "../temporal/level2ActionLayer";
+import { SharedAcpForecastLayer } from "../temporal/sharedAcpForecastLayer";
 import { Level3SessionLayer } from "../temporal/level3SessionLayer";
 import { Level4UserLayer } from "../temporal/level4UserLayer";
 import {
@@ -327,6 +328,31 @@ function waitForVideoMetadata(video) {
     video.addEventListener("loadedmetadata", finish, { once: true });
     window.setTimeout(finish, 1200);
   });
+}
+
+function compactAcpForecast(acpForecast) {
+  const compactBand = (band) => band
+    ? {
+        start_frame: band.start_frame,
+        end_frame: band.end_frame,
+        horizon_ms: band.horizon_ms,
+        available_frames: band.frames?.length || 0,
+        summary: band.summary
+      }
+    : null;
+
+  return {
+    model_name: acpForecast?.model_name || "ACP-STGAT",
+    status: acpForecast?.status || "unavailable",
+    short_horizon_ms: acpForecast?.short_horizon_ms || 0,
+    bands: {
+      level1: compactBand(acpForecast?.bands?.level1),
+      level2: compactBand(acpForecast?.bands?.level2),
+      awareness: compactBand(acpForecast?.bands?.awareness),
+      level3: compactBand(acpForecast?.bands?.level3)
+    },
+    horizon_reliability: acpForecast?.horizon_reliability || {}
+  };
 }
 
 function resolveFiniteVideoDuration(video) {
@@ -869,6 +895,8 @@ export default function SkeletonCanvas({
   inputSource = "live",
   inputVideoUrl = null,
   inputVideoName = null,
+  uploadedPlaybackRate = 1,
+  uploadedPlaybackMode = "deterministic",
   onInputStatus,
   onPredictionStatus,
   temporalInferenceMode = "auto"
@@ -937,6 +965,7 @@ export default function SkeletonCanvas({
   const handModelPromiseRef = useRef(null);
   const faceModelPromiseRef = useRef(null);
   const level1MotionRef = useRef(new Level1MotionLayer());
+  const sharedAcpForecastRef = useRef(new SharedAcpForecastLayer());
   const level2ActionRef = useRef(new Level2ActionLayer(getStudioPerformanceConfig(performanceProfile)));
   const level3SessionRef = useRef(new Level3SessionLayer());
   const level4UserRef = useRef(new Level4UserLayer());
@@ -1229,16 +1258,35 @@ export default function SkeletonCanvas({
           throw new Error("Unable to determine this video's duration.");
         }
         await seekVideo(videoRef.current, 0);
+        if (uploadedPlaybackMode === "realtime") {
+          uploadedAnalysisRef.current.active = false;
+          videoRef.current.playbackRate = Math.min(
+            1,
+            Math.max(0.25, Number(uploadedPlaybackRate) || 1)
+          );
+          await videoRef.current.play();
+          onInputStatus?.(`Playing and analyzing video: ${inputVideoName || "uploaded sample"}`);
+          return {
+            started: true,
+            durationMs: durationSeconds * 1000
+          };
+        }
         uploadedAnalysisRef.current = {
           active: true,
           sampleIntervalMs: 1000 / 30,
           frameIndex: 0,
           lastVideoTimestampMs: null,
           seeking: false,
-          durationMs: durationSeconds * 1000
+          durationMs: durationSeconds * 1000,
+          // Deterministic upload analysis advances by video timestamps, but
+          // paced Practice needs the visible replay to advance in real time.
+          presentationRate: Math.min(1, Math.max(0.25, Number(uploadedPlaybackRate) || 1))
         };
         onInputStatus?.(`Analyzing video deterministically: ${inputVideoName || "uploaded sample"}`);
-        return true;
+        return {
+          started: true,
+          durationMs: durationSeconds * 1000
+        };
       },
       discard: async () => {
         await stopPracticeVideoCapture();
@@ -1258,6 +1306,8 @@ export default function SkeletonCanvas({
     inputSource,
     inputVideoName,
     inputVideoUrl,
+    uploadedPlaybackMode,
+    uploadedPlaybackRate,
     onInputStatus,
     onPracticeVideoController,
     startPracticeVideoCapture,
@@ -1391,7 +1441,9 @@ export default function SkeletonCanvas({
       if (techniquePackageRef.current === techniquePackage) {
         techniquePackageRef.current = null;
       }
-      engine.end(performance.now());
+      // Uploaded analysis uses video timestamps. Let the engine close at its
+      // last processed frame rather than mixing that clock with wall time.
+      engine.end();
       if (trackingSessionEngineRef.current === engine) {
         trackingSessionEngineRef.current = null;
       }
@@ -1419,7 +1471,10 @@ export default function SkeletonCanvas({
         SESSION_STATES.SESSION_COMPLETE
       ].includes(engine.sessionState)
     ) {
-      const summary = engine.end(performance.now());
+      // The engine's default is the final pose/video timestamp. Passing
+      // performance.now() here previously stretched a final open repetition
+      // by hundreds of seconds for uploaded-video sessions.
+      const summary = engine.end();
       onRuleEngineSessionCompleteRef.current?.(summary);
     }
   }, [trackingSessionActive]);
@@ -1464,6 +1519,7 @@ export default function SkeletonCanvas({
     previousHandednessRef.current = null;
     previousFaceRef.current = null;
     level1MotionRef.current = new Level1MotionLayer();
+    sharedAcpForecastRef.current = new SharedAcpForecastLayer();
     level2ActionRef.current = new Level2ActionLayer(performanceConfigRef.current);
     predictionLedgerRef.current.reset();
     trackingSessionEngineRef.current?.reset();
@@ -1511,6 +1567,7 @@ export default function SkeletonCanvas({
     basePerformanceConfigRef.current = getStudioPerformanceConfig(performanceProfile, {
       onnxEnabled: Boolean(
         ["model", "both"].includes(temporalInferenceMode) ||
+        skeletonLayers?.acp ||
         skeletonLayers?.onnx ||
         enableAwareness ||
         (onLandmarkFrame && !capturePoseOnly)
@@ -1521,11 +1578,6 @@ export default function SkeletonCanvas({
       performanceMode,
       adaptiveTierRef.current
     );
-    level2ActionRef.current.config = {
-      ...level2ActionRef.current.config,
-      onnxEnabled: performanceConfigRef.current.onnxEnabled,
-      onnxIntervalMs: performanceConfigRef.current.onnxIntervalMs
-    };
     shouldTrackHandsRef.current =
       !capturePoseOnly && (
         performanceConfigRef.current.handMode === "always" ||
@@ -2191,7 +2243,7 @@ export default function SkeletonCanvas({
           shouldTrackHandsRef.current,
           shouldTrackFaceRef.current
         );
-        const level1State = {
+        let level1State = {
           ...baseLevel1State,
           motion_context: {
             ...(baseLevel1State?.motion_context || {}),
@@ -2239,20 +2291,24 @@ export default function SkeletonCanvas({
             }) || null
           : trackingSessionEngineRef.current?.latestFrame || null;
         onRuleEngineFrameUpdateRef.current?.(ruleEngineShadowFrame);
+        const acpForecast = sharedAcpForecastRef.current.update({
+          level1State,
+          enabled: performanceConfigRef.current.onnxEnabled,
+          inferenceIntervalMs: performanceConfigRef.current.onnxIntervalMs
+        });
+        level1State = {
+          ...level1State,
+          forecast_context: compactAcpForecast(acpForecast)
+        };
         let level2State = level2ActionRef.current.update({
           level1State,
           requiredParts: requiredPartsRef.current,
           currentStepId: currentStepIdRef.current,
           currentStepName: currentStepNameRef.current,
-          techniqueName: sessionConfigRef.current?.technique_name
+          techniqueName: sessionConfigRef.current?.technique_name,
+          acpForecast
         });
-        predictionLedgerRef.current.addSequence({
-          model: "level1",
-          originTimestampMs: analysisTimestampMs,
-          forecasts: level1State?.debug?.predictedFrames || [],
-          confidence: level1State?.motion_context?.prediction_confidence || 0
-        });
-        const level2Prediction = level2State?.debug?.onnxPrediction;
+        const level2Prediction = acpForecast?.prediction;
         const onnxRuntimeStatus =
           level2Prediction?.status ||
           level2State?.action_context?.attention_prediction?.onnx_status ||
@@ -2277,7 +2333,7 @@ export default function SkeletonCanvas({
         predictionLedgerRef.current.addSequence({
           model: "level2",
           originTimestampMs: level2Prediction?.origin_timestamp_ms,
-          forecasts: level2Prediction?.future_landmark_frames || [],
+          forecasts: acpForecast?.initial_frames || [],
           confidence: level2State?.action_context?.prediction_confidence || 0
         });
         const predictionAggregate = predictionLedgerRef.current.resolve({
@@ -2286,12 +2342,23 @@ export default function SkeletonCanvas({
           observedConfidence: level1State?.tracking?.confidence || 0
         });
         if (level2State?.action_context) {
+          const awarenessBand = acpForecast?.bands?.awareness;
+          const awarenessPrediction = level2Prediction && awarenessBand
+            ? {
+                ...level2Prediction,
+                prediction_horizon_ms: awarenessBand.horizon_ms,
+                future_landmark_frames: awarenessBand.frames
+              }
+            : level2Prediction;
           const forecastAwareness = deriveForecastAwareness({
-            prediction: level2Prediction,
+            prediction: awarenessPrediction,
             requiredParts: requiredPartsRef.current,
             trackingConfidence: level1State?.tracking?.confidence || 0,
             predictionConfidence:
-              level2State.action_context.prediction_confidence || 0,
+              Math.min(
+                level2State.action_context.prediction_confidence || 0,
+                awarenessBand?.summary?.confidence ?? 1
+              ),
             agreementError: predictionAggregate.agreementError,
             sourceCounts: predictionAggregate.sourceCounts
           });
@@ -2311,7 +2378,8 @@ export default function SkeletonCanvas({
           level1State,
           level2State,
           techniqueName: sessionConfigRef.current?.technique_name,
-          currentStepName: currentStepNameRef.current
+          currentStepName: currentStepNameRef.current,
+          acpForecast
         });
         const level3UiState = ruleEngineShadowFrame && level3State
           ? {
@@ -2335,6 +2403,7 @@ export default function SkeletonCanvas({
           level2State,
           level3State,
           level4State,
+          acpForecast,
           mode: enableCoachRef.current ? "train" : "practice"
         });
         const anglesPayload = {
@@ -2433,11 +2502,20 @@ export default function SkeletonCanvas({
           onSituationAwarenessUpdateRef.current(situationAwarenessState);
         }
 
-        const latencyCompensatedOnnxLandmarks = compensatePredictionLatency(
-          level2State?.debug?.onnxPredictedLandmarks,
-          level2State?.debug?.onnxPrediction?.source_landmarks,
-          level1State?.debug?.currentLandmarks || frame.pose
-        );
+        const selectedAcpFrames = Array.isArray(skeletonLayersRef.current.acpFrames)
+          ? skeletonLayersRef.current.acpFrames
+          : [1, 3, 6];
+        const latencyCompensatedAcpFrames = (acpForecast?.all_frames || [])
+          .filter((forecast) => selectedAcpFrames.includes(forecast.horizon_frame))
+          .map((forecast) => ({
+            horizonFrame: forecast.horizon_frame,
+            landmarks: compensatePredictionLatency(
+              forecast.landmarks,
+              acpForecast?.prediction?.source_landmarks,
+              level1State?.debug?.currentLandmarks || frame.pose
+            )
+          }))
+          .filter((forecast) => forecast.landmarks?.length);
 
         const displayPoseSelection = selectPredictionAwareDisplayPose(
           predictionAggregate
@@ -2468,8 +2546,11 @@ export default function SkeletonCanvas({
           motionEnergy: level2State?.action_context?.motion_energy ?? 0,
           trackingConfidence: level1State?.tracking?.confidence ?? 0,
           predictionAggregate,
+          acpForecast: compactAcpForecast(acpForecast),
           forecastAwareness:
             level2State?.action_context?.forecast_awareness || null,
+          predictedTransition:
+            level3State?.session_context?.predicted_transition || null,
           displayPoseSource: displayPoseSelection.source,
           angles: anglesPayload
         });
@@ -2490,12 +2571,11 @@ export default function SkeletonCanvas({
               correctParts: skeletonLayersRef.current.corrections === false
                 ? new Set()
                 : getCorrectParts(feedbackPartsRef.current, anglesPayload),
-              predictedLandmarks: skeletonLayersRef.current.level1
-                ? level1State?.debug?.predictedLandmarks
+              predictedLandmarks: null,
+              predictedLandmarkFrames: skeletonLayersRef.current.acp
+                ? latencyCompensatedAcpFrames
                 : null,
-              onnxPredictedLandmarks: skeletonLayersRef.current.onnx
-                ? latencyCompensatedOnnxLandmarks
-                : null
+              onnxPredictedLandmarks: null
             }
           );
         }
@@ -2716,6 +2796,8 @@ export default function SkeletonCanvas({
     ensureTemporalPhasePredictor,
     inputSource,
     inputVideoName,
+    uploadedPlaybackMode,
+    uploadedPlaybackRate,
     inputVideoUrl,
     onInputStatus
   ]);

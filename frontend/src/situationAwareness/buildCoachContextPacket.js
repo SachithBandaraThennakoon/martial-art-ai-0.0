@@ -19,8 +19,11 @@ function compactLevel1(level1State) {
     time_horizon: TEMPORAL_LAYER_KNOWLEDGE.level1_motion.prediction_horizon,
     tracking_confidence: round(level1State?.tracking?.confidence),
     fps: level1State?.tracking?.fps || 0,
-    prediction_confidence: round(motion.prediction_confidence),
-    prediction_horizon_ms: motion.prediction_horizon_ms || 0,
+    filter: motion.filter || null,
+    smoothing_alpha: round(motion.smoothing_alpha),
+    shared_forecast_model: level1State?.forecast_context?.model_name || null,
+    shared_forecast_horizon_ms:
+      level1State?.forecast_context?.short_horizon_ms || 0,
     angles_count: Object.keys(motion.angles_deg || {}).length
   };
 }
@@ -50,6 +53,17 @@ function compactLevel2(level2State) {
       likely_mistake: compactMistake(forecast.likely_mistake),
       first_risk_ms: forecast.likely_mistake?.first_risk_ms ?? null
     }
+  };
+}
+
+function compactSharedForecast(level1State) {
+  const forecast = level1State?.forecast_context || {};
+  return {
+    time_horizon: TEMPORAL_LAYER_KNOWLEDGE.shared_acp_forecast.prediction_horizon,
+    model_name: forecast.model_name || null,
+    status: forecast.status || "unavailable",
+    short_horizon_ms: forecast.short_horizon_ms || 0,
+    bands: forecast.bands || null
   };
 }
 
@@ -141,6 +155,7 @@ export function buildCoachContextPacket({
     temporal_knowledge_version: "temporal_intelligence_v1",
     temporal_layers: {
       level1_motion: compactLevel1(level1State),
+      shared_acp_forecast: compactSharedForecast(level1State),
       level2_action: compactLevel2(level2State),
       level3_session: compactLevel3(level3State),
       level4_user: compactLevel4(level4State)

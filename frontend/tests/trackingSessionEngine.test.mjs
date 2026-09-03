@@ -42,6 +42,7 @@ const JAB = {
     lead_elbow_angle: 125,
     lead_elbow_angular_velocity: 100,
     lead_wrist_forward_velocity: 0.5,
+    lead_wrist_guard_distance: 0.7,
     rear_wrist_guard_distance: 0.2,
     torso_lean: 5,
     motion_energy: 0.1
@@ -49,6 +50,7 @@ const JAB = {
   fullExtension: {
     lead_elbow_angle: 160,
     lead_wrist_forward_velocity: 0.02,
+    lead_wrist_guard_distance: 1.1,
     rear_wrist_guard_distance: 0.2,
     torso_lean: 5,
     motion_energy: 0.05
@@ -57,6 +59,7 @@ const JAB = {
     lead_elbow_angle: 130,
     lead_elbow_angular_velocity: -100,
     lead_wrist_forward_velocity: -0.3,
+    lead_wrist_guard_distance: 0.9,
     rear_wrist_guard_distance: 0.2,
     motion_energy: 0.08
   },
@@ -256,11 +259,15 @@ test("ending an active session preserves an incomplete repetition as aborted", a
   feed(engine, [0, 40, 80, 120], JAB.guard);
   feed(engine, [300, 360], JAB.extension);
 
-  const summary = engine.end(500);
+  // Uploaded-video sessions must close using their last video timestamp, not
+  // the browser wall clock used by the rendering loop.
+  const summary = engine.end();
   assert.equal(summary.total_repetitions, 1);
   assert.equal(summary.completed_repetitions, 0);
   assert.equal(summary.aborted_repetitions, 1);
   assert.equal(summary.repetitions[0].status, "session_ended");
+  assert.equal(summary.session_ended_at_ms, 360);
+  assert.equal(summary.repetitions[0].end_ms, 360);
 });
 
 test("a paused whole-session engine freezes transitions until it resumes", async () => {

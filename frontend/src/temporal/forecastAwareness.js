@@ -97,7 +97,8 @@ function evaluateTarget(target, futureFrames, config) {
         angle,
         issue,
         margin,
-        horizonMs: frame.horizon_ms ?? frame.horizonMs ?? null
+        horizonMs: frame.horizon_ms ?? frame.horizonMs ?? null,
+        weight: Number.isFinite(frame.weight) ? frame.weight : 1
       };
     })
     .filter(Boolean);
@@ -105,6 +106,11 @@ function evaluateTarget(target, futureFrames, config) {
 
   const violations = samples.map((sample) => Boolean(sample.issue));
   const violationCount = violations.filter(Boolean).length;
+  const totalWeight = samples.reduce((total, sample) => total + sample.weight, 0);
+  const violationWeight = samples.reduce(
+    (total, sample) => total + (sample.issue ? sample.weight : 0),
+    0
+  );
   const sustainedFrames = longestRun(violations);
   const violatingSamples = samples.filter((sample) => sample.issue);
   const firstViolation = violatingSamples[0];
@@ -119,7 +125,7 @@ function evaluateTarget(target, futureFrames, config) {
   );
   const tolerance = Math.max((range.max - range.min) / 2, 8);
   const risk = clamp(
-    (violationCount / samples.length) * 0.45 +
+    (violationWeight / Math.max(totalWeight, 0.001)) * 0.45 +
       (sustainedFrames / samples.length) * 0.35 +
       clamp(maximumMargin / (tolerance * 2), 0, 1) * 0.2,
     0,

@@ -109,6 +109,48 @@ function getCoachMessage({ recommendation, repeatedMistake, masteryScore }) {
   return "Continue. The session trend is being tracked.";
 }
 
+export function getPredictedSessionTransition(action = {}, forecastSummary = null) {
+  const currentPhase = action.temporal_segmentation?.motion_phase || "unknown";
+  const confidence = forecastSummary?.confidence || 0;
+  const base = {
+    advisory_only: true,
+    current_phase: currentPhase,
+    confidence,
+    eta_ms: forecastSummary?.peak_eta_ms ?? null
+  };
+
+  if (!forecastSummary || forecastSummary.intent === "unavailable") {
+    return { ...base, intent: "unavailable", transition: "unknown", next_phase: null };
+  }
+  if (currentPhase === "tracking_lost") {
+    return { ...base, intent: "suppressed", transition: "unknown", next_phase: null };
+  }
+  if (forecastSummary.intent === "hold_likely") {
+    return { ...base, intent: "hold", transition: "none", next_phase: currentPhase };
+  }
+
+  if (forecastSummary.return_likely) {
+    const completionCandidate = ["step_active", "peak_extension", "recovery"].includes(currentPhase);
+    return {
+      ...base,
+      intent: "move_and_return",
+      transition: completionCandidate ? "completion_candidate" : "movement_cycle_candidate",
+      next_phase: completionCandidate ? "recovery" : "step_active"
+    };
+  }
+
+  if (["idle", "preparation", "unknown"].includes(currentPhase)) {
+    return { ...base, intent: "movement", transition: "start_candidate", next_phase: "step_active" };
+  }
+  if (currentPhase === "step_active") {
+    return { ...base, intent: "movement", transition: "peak_candidate", next_phase: "peak_extension" };
+  }
+  if (currentPhase === "peak_extension") {
+    return { ...base, intent: "movement", transition: "retraction_candidate", next_phase: "recovery" };
+  }
+  return { ...base, intent: "movement", transition: "continue_candidate", next_phase: currentPhase };
+}
+
 export class Level3SessionLayer {
   constructor(config = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -139,7 +181,13 @@ export class Level3SessionLayer {
     return this.repetitionLedger.endSession(timestampMs);
   }
 
-  update({ level1State, level2State, techniqueName = "", currentStepName = "" }) {
+  update({
+    level1State,
+    level2State,
+    techniqueName = "",
+    currentStepName = "",
+    acpForecast = null
+  }) {
     if (!level1State || !level2State?.action_context) return this.latestState;
 
     const timestampMs = level1State.timestamp * 1000;
@@ -246,6 +294,8 @@ export class Level3SessionLayer {
       recommendation,
       fatigueRiskThreshold: this.config.fatigueRiskThreshold
     });
+    const level3ForecastSummary = acpForecast?.bands?.level3?.summary || null;
+    const predictedTransition = getPredictedSessionTransition(action, level3ForecastSummary);
 
     this.latestState = {
       timestamp: level1State.timestamp,
@@ -267,6 +317,17 @@ export class Level3SessionLayer {
           [event.type]: (counts[event.type] || 0) + 1
         }), {}),
         repetition_summary: repetitionSummary,
+        shared_forecast: {
+          model_name: acpForecast?.model_name || null,
+          status: acpForecast?.status || "unavailable",
+          horizon_ms: acpForecast?.bands?.level3?.horizon_ms || 0,
+          available_frames: acpForecast?.bands?.level3?.frames?.length || 0,
+          predicted_intent: acpForecast?.bands?.level3?.summary?.intent || "unavailable",
+          transition_eta_ms: acpForecast?.bands?.level3?.summary?.peak_eta_ms ?? null,
+          return_likely: Boolean(acpForecast?.bands?.level3?.summary?.return_likely),
+          confidence: acpForecast?.bands?.level3?.summary?.confidence || 0
+        },
+        predicted_transition: predictedTransition,
         ready_for_level_4:
           hasEnoughSamples &&
           recommendation === "advance_step" &&

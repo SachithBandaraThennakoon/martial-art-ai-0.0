@@ -7,9 +7,7 @@ const DEFAULT_CONFIG = {
   stepReadyThreshold: 0.78,
   mistakeRiskThreshold: 0.45,
   trendWindow: 12,
-  attentionPredictionHorizonMs: 500,
-  onnxEnabled: false,
-  onnxIntervalMs: 900
+  attentionPredictionHorizonMs: 500
 };
 
 function clamp(value, min, max) {
@@ -100,26 +98,8 @@ export class Level2ActionLayer {
     this.lastUpdateMs = 0;
     this.lastMotionEnergy = 0;
     this.history = [];
-    this.motionFrames = [];
     this.previousStepId = null;
-    this.lastOnnxUpdateMs = 0;
-    this.onnxPredictor = null;
-    this.onnxPredictorPromise = null;
     this.segmentationEngine = new ActionSegmentationEngine(config.segmentation);
-  }
-
-  ensureOnnxPredictor() {
-    if (this.onnxPredictor || this.onnxPredictorPromise || !this.config.onnxEnabled) {
-      return;
-    }
-
-    this.onnxPredictorPromise = import("./stgatOnnxPredictor")
-      .then(({ StgatOnnxPredictor }) => {
-        this.onnxPredictor = new StgatOnnxPredictor();
-      })
-      .finally(() => {
-        this.onnxPredictorPromise = null;
-      });
   }
 
   update({
@@ -127,19 +107,13 @@ export class Level2ActionLayer {
     requiredParts = [],
     currentStepId = null,
     currentStepName = "",
-    techniqueName = ""
+    techniqueName = "",
+    acpForecast = null
   }) {
     if (!level1State?.motion_context) return null;
 
     const timestampMs = level1State.timestamp * 1000;
     const motionEnergy = getMotionEnergy(level1State.motion_context);
-    this.motionFrames.push({
-      timestamp: level1State.timestamp,
-      landmarks: level1State.debug?.currentLandmarks || [],
-      velocity: level1State.motion_context?.velocity || {},
-      acceleration: level1State.motion_context?.acceleration || {}
-    });
-    this.motionFrames = this.motionFrames.slice(-70);
     const motionChanged =
       Math.abs(motionEnergy - this.lastMotionEnergy) >= this.config.motionThreshold;
     const dueForUpdate = timestampMs - this.lastUpdateMs >= this.config.updateIntervalMs;
@@ -195,11 +169,7 @@ export class Level2ActionLayer {
     );
     const techniqueProbability = requiredParts.length ? stepProbability : 0;
     const predictionConfidence = clamp(
-      (
-        (level1State.motion_context.prediction_confidence || 0) +
-        (level1State.tracking?.confidence || 0) +
-        stepProbability
-      ) / 3,
+      ((level1State.tracking?.confidence || 0) + stepProbability) / 2,
       0,
       1
     );
@@ -251,29 +221,7 @@ export class Level2ActionLayer {
       currentStepName
     });
     actionContext.temporal_segmentation = temporalSegmentation;
-    const shouldUpdateOnnx =
-      this.config.onnxEnabled &&
-      this.onnxPredictor &&
-      timestampMs - this.lastOnnxUpdateMs >= this.config.onnxIntervalMs;
-    if (this.config.onnxEnabled) {
-      this.ensureOnnxPredictor();
-    }
-    const onnxPrediction = this.config.onnxEnabled && shouldUpdateOnnx
-      ? this.onnxPredictor?.update({
-          frames: this.motionFrames,
-          currentLandmarks: level1State.debug?.currentLandmarks || [],
-          actionContext: {
-            ...actionContext,
-            attention_prediction_horizon_ms: this.config.attentionPredictionHorizonMs
-          }
-        })
-      : this.config.onnxEnabled
-        ? this.onnxPredictor?.latestPrediction || null
-        : null;
-
-    if (shouldUpdateOnnx) {
-      this.lastOnnxUpdateMs = timestampMs;
-    }
+    const onnxPrediction = acpForecast?.prediction || null;
     const modelPrediction = onnxPrediction?.landmarks ? onnxPrediction : null;
     const actionState = {
       timestamp: level1State.timestamp,
@@ -282,19 +230,27 @@ export class Level2ActionLayer {
         attention_prediction: {
           model_name: modelPrediction?.model_name,
           display_name: modelPrediction?.display_name,
-          backend: modelPrediction?.backend || this.onnxPredictor?.backend || null,
+          backend: modelPrediction?.backend || null,
           status: modelPrediction?.status,
           source: modelPrediction?.source || "none",
           error: modelPrediction?.error || null,
-          onnx_status: onnxPrediction?.status || this.onnxPredictor?.status || (
-            this.config.onnxEnabled ? "loading" : "disabled"
-          ),
+          onnx_status: acpForecast?.status || "disabled",
           onnx_error: onnxPrediction?.error || null,
           input_names: modelPrediction?.input_names || [],
           output_names: modelPrediction?.output_names || [],
           output_dims: modelPrediction?.output_dims || [],
           prediction_horizon_ms:
-            modelPrediction?.prediction_horizon_ms || this.config.attentionPredictionHorizonMs,
+            acpForecast?.bands?.level2?.horizon_ms ||
+            modelPrediction?.prediction_horizon_ms ||
+            this.config.attentionPredictionHorizonMs,
+          forecast_band: acpForecast?.bands?.level2
+            ? {
+                start_frame: acpForecast.bands.level2.start_frame,
+                end_frame: acpForecast.bands.level2.end_frame,
+                horizon_ms: acpForecast.bands.level2.horizon_ms,
+                trajectory: acpForecast.bands.level2.summary
+              }
+            : null,
           spatial_attention: [],
           temporal_attention: [],
           graph_attention: [],

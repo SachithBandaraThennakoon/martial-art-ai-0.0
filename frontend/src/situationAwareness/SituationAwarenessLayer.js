@@ -376,7 +376,14 @@ export class SituationAwarenessLayer {
     return { state: "resume_ready", stable_for_ms: stableForMs };
   }
 
-  update({ level1State, level2State, level3State, level4State, mode = "train" }) {
+  update({
+    level1State,
+    level2State,
+    level3State,
+    level4State,
+    acpForecast = null,
+    mode = "train"
+  }) {
     const action = level2State?.action_context;
     const session = level3State?.session_context;
     const user = level4State?.user_context;
@@ -450,6 +457,13 @@ export class SituationAwarenessLayer {
       timestamp: level1State.timestamp,
       situation_context: {
         mode,
+        shared_forecast: {
+          model_name: acpForecast?.model_name || null,
+          status: acpForecast?.status || "unavailable",
+          horizon_ms: acpForecast?.bands?.awareness?.horizon_ms || 0,
+          available_frames: acpForecast?.bands?.awareness?.frames?.length || 0,
+          trajectory: acpForecast?.bands?.awareness?.summary || null
+        },
         situation_state: situationState,
         raw_state: rawSituationState,
         stable_state: situationState,

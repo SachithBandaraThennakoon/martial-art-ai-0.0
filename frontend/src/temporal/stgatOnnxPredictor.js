@@ -3,6 +3,7 @@ import {
   configureWasmRuntime,
   configureWebGpuRuntime
 } from "../tracking/onnxRuntimeAssets.js";
+import { sampleUniformPoseFrames } from "./uniformFrameSampler.js";
 
 const MODEL_PATH = "/models/acp_stgat_motion_predictor.onnx?v=acp-stgat-mediapipe33-opset18";
 const MODEL_NAME = "ACP-STGAT";
@@ -184,14 +185,11 @@ function toModelFrame(frame, jointCount = DEFAULT_JOINT_COUNT) {
 }
 
 function buildSequenceFrames(frames, sequenceLength) {
-  const sourceFrames = frames.slice(-sequenceLength);
-  const paddingCount = Math.max(0, sequenceLength - sourceFrames.length);
-  const firstFrame = sourceFrames[0] || null;
-
-  return [
-    ...Array.from({ length: paddingCount }, () => firstFrame),
-    ...sourceFrames
-  ];
+  return sampleUniformPoseFrames(
+    frames,
+    sequenceLength,
+    1000 / MODEL_FRAME_DURATION_MS
+  );
 }
 
 function buildInputTensor(runtime, session, frames) {

@@ -67,6 +67,14 @@ export function drawSkeleton(
   const predictedPoints = options.predictedLandmarks?.map((point) =>
     fitLivePoint(point, options.mirrored)
   );
+  const predictedPointFrames = (options.predictedLandmarkFrames || []).map(
+    (frame, index) => ({
+      horizonFrame: frame?.horizonFrame || index + 1,
+      points: (frame?.landmarks || frame)?.map((point) =>
+        fitLivePoint(point, options.mirrored)
+      )
+    })
+  );
   const onnxPredictedPoints = options.onnxPredictedLandmarks?.map((point) =>
     fitLivePoint(point, options.mirrored)
   );
@@ -77,7 +85,8 @@ export function drawSkeleton(
     color,
     shadowColor,
     lineWidth = 3,
-    dashed = false
+    dashed = false,
+    opacity = 1
   ) => {
     if (!layerPoints) return;
 
@@ -87,7 +96,7 @@ export function drawSkeleton(
     ctx.strokeStyle = color;
     ctx.fillStyle = color;
     ctx.lineWidth = lineWidth;
-    ctx.globalAlpha = dashed ? 0.94 : 1;
+    ctx.globalAlpha = opacity;
     ctx.setLineDash(dashed ? [12, 7] : []);
 
     BODY_CONNECTIONS.forEach((connection) => {
@@ -202,6 +211,19 @@ export function drawSkeleton(
   if (predictedPoints) {
     drawPredictionLayer(predictedPoints, PREDICTION_YELLOW, "rgba(255, 216, 74, 0.58)", 3);
   }
+
+  predictedPointFrames.forEach(({ points: framePoints, horizonFrame }) => {
+    const progress = Math.max(0, Math.min(1, (horizonFrame - 1) / 29));
+    const hue = Math.round(220 * (1 - progress));
+    drawPredictionLayer(
+      framePoints,
+      `hsl(${hue} 94% 61%)`,
+      `hsl(${hue} 94% 61% / 0.72)`,
+      2.5 + progress * 1.5,
+      horizonFrame < 30,
+      0.48 + progress * 0.34
+    );
+  });
 
   drawPredictionLayer(
     onnxPredictedPoints,

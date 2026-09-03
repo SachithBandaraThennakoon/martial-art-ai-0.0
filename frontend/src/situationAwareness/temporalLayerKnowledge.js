@@ -1,11 +1,19 @@
 export const TEMPORAL_LAYER_KNOWLEDGE = {
   level1_motion: {
     name: "Level 1 Motion",
-    time_scale: "current_frame_to_short_horizon",
-    prediction_horizon: "t+100ms_to_t+300ms",
-    meaning: "Raw pose quality, joint angles, velocity, acceleration, and short motion prediction.",
+    time_scale: "current_frame",
+    prediction_horizon: "observed_now",
+    meaning: "Filtered pose quality, joint angles, velocity, and acceleration without local forecasting.",
     agent_use: "Use for body mechanics, tracking confidence, and immediate motion quality.",
     trust_rule: "Do not over-correct technique when tracking confidence is low."
+  },
+  shared_acp_forecast: {
+    name: "Shared ACP-STGAT Forecast",
+    time_scale: "short_future",
+    prediction_horizon: "t+33ms_to_t+1s",
+    meaning: "One learned forecast split into consumer bands: L1 frames 1-6, L2 frames 1-12, awareness frames 4-12, and L3 frames 1-30.",
+    agent_use: "Use near frames for immediate form, medium frames for action intent, and the full horizon for advisory session transitions.",
+    trust_rule: "Act on a forecast only when tracking is reliable and later observations agree."
   },
   level2_action: {
     name: "Level 2 Action",

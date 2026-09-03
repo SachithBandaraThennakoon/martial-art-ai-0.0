@@ -75,6 +75,35 @@ class PracticeAnalyticsTests(unittest.TestCase):
         self.assertIsNone(payload["tracking_quality_percentage"])
         self.assertIsNone(payload["average_response_time_ms"])
         self.assertEqual(payload["common_form_errors"], [])
+        self.assertIsNone(payload["forecast_summary"])
+
+    def test_persists_acp_forecast_as_advisory_session_evidence(self):
+        payload = extract_practice_analytics({
+            "acpForecastSummary": {
+                "model_name": "ACP-STGAT",
+                "observed_samples": 300,
+                "forecast_samples": 240,
+                "coverage_percentage": 80,
+                "band_reliability": {
+                    "level1": 0.92,
+                    "level2": 0.78,
+                    "awareness": 0.74,
+                    "level3": 0.51,
+                },
+                "dominant_intent": "movement_likely",
+                "dominant_transition": "completion_candidate",
+                "transition_candidates": 18,
+                "trusted_warning_samples": 3,
+                "peak_warning_risk": 0.64,
+                "affects_rep_count": True,
+            }
+        })
+
+        forecast = payload["forecast_summary"]
+        self.assertEqual(forecast["coverage_percentage"], 80)
+        self.assertEqual(forecast["bands"]["level3"], "frames 1-30")
+        self.assertEqual(forecast["dominant_transition"], "completion_candidate")
+        self.assertFalse(forecast["affects_rep_count"])
 
     def test_post_session_result_is_not_overwritten_by_stale_session_count(self):
         payload = extract_practice_analytics({

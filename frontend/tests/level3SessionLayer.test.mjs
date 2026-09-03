@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { Level3SessionLayer } from "../src/temporal/level3SessionLayer.js";
+import {
+  getPredictedSessionTransition,
+  Level3SessionLayer
+} from "../src/temporal/level3SessionLayer.js";
 
 function states(timestamp, {
   score = 0.9,
@@ -130,4 +133,47 @@ test("Level 3 excludes tracking-loss frames from mastery and fatigue history", (
   assert.equal(ignored.debug.samples, 1);
   assert.equal(recovered.debug.samples, 2);
   assert.ok(recovered.session_context.fatigue_risk < 0.2);
+});
+
+test("Level 3 treats a full-horizon return as an advisory completion candidate", () => {
+  const transition = getPredictedSessionTransition(
+    { temporal_segmentation: { motion_phase: "peak_extension" } },
+    {
+      intent: "movement_likely",
+      return_likely: true,
+      confidence: 0.78,
+      peak_eta_ms: 466
+    }
+  );
+
+  assert.equal(transition.transition, "completion_candidate");
+  assert.equal(transition.next_phase, "recovery");
+  assert.equal(transition.advisory_only, true);
+});
+
+test("Level 3 does not turn a forecast into an observed repetition", () => {
+  const layer = new Level3SessionLayer({ updateIntervalMs: 0, minSamplesForDecision: 1 });
+  const input = states(1);
+  input.level2State.action_context.temporal_segmentation = { motion_phase: "peak_extension" };
+  input.acpForecast = {
+    model_name: "ACP-STGAT",
+    status: "ready",
+    bands: {
+      level3: {
+        horizon_ms: 1000,
+        frames: Array.from({ length: 30 }),
+        summary: {
+          intent: "movement_likely",
+          return_likely: true,
+          confidence: 0.8,
+          peak_eta_ms: 500
+        }
+      }
+    }
+  };
+
+  const state = layer.update(input);
+
+  assert.equal(state.session_context.predicted_transition.transition, "completion_candidate");
+  assert.equal(state.session_context.repetition_summary.repetitions_completed, 0);
 });
