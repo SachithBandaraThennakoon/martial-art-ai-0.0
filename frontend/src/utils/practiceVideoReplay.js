@@ -67,6 +67,7 @@ export function buildPracticeVideoReplayFrames({
       focusBodyPart: null,
       issue: null,
       wrongBodyParts: [],
+      advisoryBodyParts: [],
       landmarks: pose.map((point) => ({ ...point })),
       observedLandmarks: pose.map((point) => ({ ...point })),
       measurementLandmarks: (frame.measurementPose || pose).map(

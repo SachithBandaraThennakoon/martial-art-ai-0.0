@@ -43,3 +43,39 @@ test("missing required tracking data makes the keyframe unscorable", () => {
   assert.equal(result.focusBodyPart, "elbow_left");
   assert.equal(result.issue, "missing");
 });
+
+test("a small Jab elbow overshoot is an advisory, not a red form error", () => {
+  const result = scorePracticeAngles([
+    {
+      body_part: "elbow_left",
+      min: 155,
+      max: 177,
+      measurement_tolerance_deg: 3
+    }
+  ], {
+    elbow_left: 179.22
+  });
+
+  assert.equal(result.accuracy, 100);
+  assert.equal(result.focusBodyPart, "elbow_left");
+  assert.equal(result.issue, "near_upper_limit");
+  assert.deepEqual(result.wrongBodyParts, []);
+  assert.deepEqual(result.advisoryBodyParts, ["elbow_left"]);
+});
+
+test("an angle beyond measurement tolerance remains a form problem", () => {
+  const result = scorePracticeAngles([
+    {
+      body_part: "elbow_left",
+      min: 70,
+      max: 110,
+      measurement_tolerance_deg: 3
+    }
+  ], {
+    elbow_left: 116
+  });
+
+  assert.equal(result.issue, "too_open");
+  assert.deepEqual(result.wrongBodyParts, ["elbow_left"]);
+  assert.deepEqual(result.advisoryBodyParts, []);
+});

@@ -51,6 +51,10 @@ def _with_legacy_angles(training_steps):
                         "body_part": target["body_part"],
                         "min": target["min"],
                         "max": target["max"],
+                        **(
+                            {"measurement_tolerance_deg": target["measurement_tolerance_deg"]}
+                            if "measurement_tolerance_deg" in target else {}
+                        ),
                     }
                     for target in step.get("angle_targets", [])
                 ],
@@ -95,6 +99,40 @@ def load_technique_packages(root=TECHNIQUE_ROOT):
     return packages
 
 
+def load_admin_technique_packages(root=TECHNIQUE_ROOT):
+    """Load every source record in the shape expected by the catalog studio.
+
+    The runtime loader above deliberately excludes draft and incomplete records.
+    Administrators still need those records so they can author the missing steps
+    and publish them from the manual catalog workspace.
+    """
+    root = Path(root).resolve()
+    packages = []
+    seen_ids = set()
+
+    for source_file in sorted((root / "techniques").glob("*.json")):
+        record = _read_json(source_file)
+        technique = record.get("technique") or {}
+        technique_id = str(technique.get("slug") or "").strip()
+        if not technique_id:
+            continue
+        if technique_id in seen_ids:
+            raise ValueError(f'Duplicate technique id "{technique_id}"')
+        seen_ids.add(technique_id)
+
+        training_steps = record.get("training_config") or {}
+        packages.append({
+            "id": technique_id,
+            "enabled": technique.get("status") == "active",
+            "has_tracking": bool(training_steps.get("temporal_runtime")),
+            "catalog": _catalog_payload(technique, technique_id),
+            "training_steps": training_steps,
+            "learning_content": record.get("learning_content"),
+        })
+
+    return packages
+
+
 def load_technique_record(technique_id, root=TECHNIQUE_ROOT):
     """Load one source record by slug for Guide and other read-only consumers."""
     requested_id = str(technique_id or "").strip().lower()
@@ -119,7 +157,15 @@ def load_technique_catalog(root=TECHNIQUE_ROOT):
         return {
             **step,
             "angles": [
-                {"body_part": target["body_part"], "min": target["min"], "max": target["max"]}
+                {
+                    "body_part": target["body_part"],
+                    "min": target["min"],
+                    "max": target["max"],
+                    **(
+                        {"measurement_tolerance_deg": target["measurement_tolerance_deg"]}
+                        if "measurement_tolerance_deg" in target else {}
+                    ),
+                }
                 for target in angle_targets
             ],
         }

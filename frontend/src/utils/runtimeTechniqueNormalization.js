@@ -7,7 +7,14 @@ export function normalizeRuntimeSteps(trainingConfig = {}) {
     const scoringAngles = Array.isArray(step.angles) && step.angles.length
       ? step.angles
       : (primaryAngles.length ? primaryAngles : angleTargets).map(
-          ({ body_part, min, max }) => ({ body_part, min, max })
+          (target) => ({
+            body_part: target.body_part,
+            min: target.min,
+            max: target.max,
+            ...(target.measurement_tolerance_deg != null
+              ? { measurement_tolerance_deg: target.measurement_tolerance_deg }
+              : {})
+          })
         );
 
     return {

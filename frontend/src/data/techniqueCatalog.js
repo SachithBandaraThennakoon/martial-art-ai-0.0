@@ -77,10 +77,13 @@ function buildTechniqueCatalog({
       quality_targets: step.quality_targets || [],
       feedback_priority: step.feedback_priority || [],
       evaluation_profile: evaluationProfile,
-      angles: primaryAngles.map(({ body_part, min, max }) => ({
-        body_part,
-        min,
-        max
+      angles: primaryAngles.map((angle) => ({
+        body_part: angle.body_part,
+        min: angle.min,
+        max: angle.max,
+        ...(angle.measurement_tolerance_deg != null
+          ? { measurement_tolerance_deg: angle.measurement_tolerance_deg }
+          : {})
       }))
     };
   };

@@ -33,7 +33,7 @@ if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?", TAPE_STORAGE_CONTAI
 
 
 FRAME_KEYS = {
-    "t", "st", "n", "r", "s", "a", "f", "i", "w", "p", "op", "wp", "ap",
+    "t", "st", "n", "r", "s", "a", "f", "i", "w", "aw", "p", "op", "wp", "ap",
     "av", "ss", "tc", "ds", "face", "fs", "hl", "hr", "cq", "ct", "ao", "at",
     "mp", "ph", "tp", "cf", "tr", "pc", "pe", "pf", "pcf", "fa", "lr", "ls",
     "lph", "ltp", "es", "ms", "mk", "nr", "dr", "qs", "ps", "sc", "rc", "af",

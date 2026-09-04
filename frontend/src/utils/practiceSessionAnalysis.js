@@ -1,3 +1,5 @@
+import { scorePracticeAngles } from "./practiceAngleScoring.js";
+
 const PHASE_LABELS = Object.freeze({
   waiting_for_movement: "Preparation",
   seeking_step: "Seeking",
@@ -51,6 +53,17 @@ const PROGRESSION_PHASES = new Set([
   "step_exit",
   "rep_peak",
   "rep_recovery",
+  "rep_complete",
+  "session_complete"
+]);
+
+// Form accuracy belongs to confirmed poses, not the travel into or out of a
+// pose. Raw live `phase` labels can remain "transition" for fast actions, so
+// post-session canonical phases are the scoring authority.
+const SCORABLE_ANALYSIS_PHASES = new Set([
+  "step_hold",
+  "step_peak",
+  "rep_peak",
   "rep_complete",
   "session_complete"
 ]);
@@ -180,6 +193,77 @@ function buildCompletionDrivenWindows(
       boundary_source: "post_session_completion"
     };
     previousEndIndex = window.end_index;
+    return window;
+  });
+}
+
+function buildStrictRuleWindows(
+  frames,
+  preparationContextMs = 900,
+  maximumRepetitions = null
+) {
+  const repIndexes = new Map();
+  frames.forEach((frame, index) => {
+    const state = frameRuleState(frame);
+    const rep = Number(state?.rep_id);
+    if (!Number.isInteger(rep) || rep <= 0) return;
+    const indexes = repIndexes.get(rep) || [];
+    indexes.push(index);
+    repIndexes.set(rep, indexes);
+  });
+
+  const maximum = Number(maximumRepetitions);
+  const completed = [...repIndexes.entries()]
+    .filter(([, indexes]) => indexes.some(
+      (index) => frameRuleState(frames[index])?.rep_state === "REP_COMPLETED"
+    ))
+    .sort(([first], [second]) => first - second);
+  const limited = Number.isInteger(maximum) && maximum > 0
+    ? completed.slice(0, maximum)
+    : completed;
+
+  let previousEndIndex = -1;
+  return limited.map(([sourceRep, indexes], windowIndex) => {
+    const progressionIndex = indexes[0];
+    const strictRepEndIndex = indexes[indexes.length - 1];
+    let endIndex = strictRepEndIndex;
+    const strictEndMs = Number(frames[strictRepEndIndex]?.elapsedMs) || 0;
+    for (let index = strictRepEndIndex + 1; index < frames.length; index += 1) {
+      const elapsedMs = Number(frames[index]?.elapsedMs) || 0;
+      if (elapsedMs - strictEndMs > 1200) break;
+      const state = frameRuleState(frames[index]);
+      if (Number.isInteger(Number(state?.rep_id)) && Number(state.rep_id) > 0) break;
+      if (!state?.tracking_lost && state?.step === "GUARD") {
+        endIndex = index;
+        break;
+      }
+    }
+    const progressionMs = Number(frames[progressionIndex]?.elapsedMs) || 0;
+    const earliestContextMs = Math.max(
+      0,
+      progressionMs - Number(preparationContextMs || 900)
+    );
+    let startIndex = progressionIndex;
+    for (let index = progressionIndex - 1; index > previousEndIndex; index -= 1) {
+      const elapsedMs = Number(frames[index]?.elapsedMs) || 0;
+      if (elapsedMs < earliestContextMs) break;
+      const state = frameRuleState(frames[index]);
+      if (!state?.tracking_lost && state?.step === "GUARD") startIndex = index;
+    }
+    const window = {
+      rep: windowIndex + 1,
+      source_rep: sourceRep,
+      start_index: Math.max(previousEndIndex + 1, startIndex),
+      end_index: endIndex,
+      progression_index: progressionIndex,
+      strict_rep_end_index: strictRepEndIndex,
+      has_completion_signal: true,
+      classifier_completion_signal: false,
+      strict_completion_signal: true,
+      strict_driven: true,
+      boundary_source: "strict_rule_replay"
+    };
+    previousEndIndex = endIndex;
     return window;
   });
 }
@@ -598,7 +682,7 @@ export function buildPracticeSessionAnalysis(
     };
   }
 
-  const repetitionWindows = buildMovementDrivenWindows(
+  const movementWindows = buildMovementDrivenWindows(
     orderedFrames,
     clusterConfig?.preparation_context_ms,
     {
@@ -606,12 +690,24 @@ export function buildPracticeSessionAnalysis(
       maximum_repetitions: Number(targetReps) || null
     }
   );
+  const strictWindows = buildStrictRuleWindows(
+    orderedFrames,
+    clusterConfig?.preparation_context_ms,
+    Number(targetReps) || null
+  );
+  const strictCompleted = Number(strictSummary?.completed_repetitions) || 0;
+  const useStrictWindows =
+    strictCompleted > 0 &&
+    strictWindows.length === strictCompleted;
+  const repetitionWindows = useStrictWindows ? strictWindows : movementWindows;
   const analysisFrames = orderedFrames.map((frame, index) => {
     const window = repetitionWindows.find(
       (candidate) =>
         index >= candidate.start_index && index <= candidate.end_index
     );
     const isScoreDriven = window?.impact_start_index !== undefined;
+    const isStrictDriven = window?.strict_driven === true;
+    const strictState = frameRuleState(frame);
     const isImpactFrame =
       isScoreDriven &&
       index >= window.impact_start_index &&
@@ -630,7 +726,24 @@ export function buildPracticeSessionAnalysis(
       !isConfirmedOpeningFrame &&
       !isImpactFrame &&
       !isConfirmedReturnFrame;
-    const analysisStep = !isScoreDriven
+    const strictCanonicalPhase = strictState?.canonical_phase || strictState?.phase;
+    const analysisStep = isStrictDriven
+      ? index < window.progression_index
+        ? 1
+        : index > window.strict_rep_end_index
+          ? Math.max(
+            Number(clusterConfig?.impact_step) || DEFAULT_CLUSTER_CONFIG.impact_step,
+            steps.length || 3
+          )
+        : ["EXTENSION", "PEAK"].includes(strictCanonicalPhase)
+          ? Number(clusterConfig?.impact_step) || DEFAULT_CLUSTER_CONFIG.impact_step
+          : ["RETRACTION", "RECOVERY"].includes(strictCanonicalPhase)
+            ? Math.max(
+              Number(clusterConfig?.impact_step) || DEFAULT_CLUSTER_CONFIG.impact_step,
+              steps.length || 3
+            )
+            : 1
+      : !isScoreDriven
       ? Number(frame.step) || null
       : index < window.impact_start_index
         ? isConfirmedOpeningFrame ? 1 : null
@@ -648,7 +761,19 @@ export function buildPracticeSessionAnalysis(
       ? null
       : (index - window.impact_start_index) /
         Math.max(1, window.impact_end_index - window.impact_start_index);
-    const analysisPhase = !isScoreDriven
+    const analysisPhase = isStrictDriven
+      ? index < window.progression_index
+        ? "step_enter"
+        : index > window.strict_rep_end_index
+          ? "rep_complete"
+        : strictCanonicalPhase === "PEAK"
+          ? "step_peak"
+          : strictCanonicalPhase === "RECOVERY"
+            ? "step_enter"
+            : strictCanonicalPhase === "RETRACTION"
+              ? "step_enter"
+              : "step_enter"
+      : !isScoreDriven
       ? frame.temporalPhase
       : index < window.impact_start_index
         ? isConfirmedOpeningFrame ? "step_hold" : "between_steps"
@@ -665,11 +790,32 @@ export function buildPracticeSessionAnalysis(
             : "rep_recovery";
     const analysisScorable =
       Boolean(window) &&
-      frame.scorable !== false &&
-      Number.isFinite(Number(frame.accuracy)) &&
-      !isTransitionFrame;
+      frame.trackingReliable !== false &&
+      Number.isInteger(analysisStep) &&
+      !isTransitionFrame &&
+      SCORABLE_ANALYSIS_PHASES.has(analysisPhase);
+    const scoringTargets = Number.isInteger(analysisStep)
+      ? steps[Math.max(0, analysisStep - 1)]?.angles || []
+      : [];
+    const scoringResult = analysisScorable && scoringTargets.length
+      ? scorePracticeAngles(
+          scoringTargets,
+          frame.angles || {}
+        )
+      : null;
     return {
       ...frame,
+      accuracy: scoringResult?.accuracy ?? (analysisScorable ? frame.accuracy : null),
+      focusBodyPart:
+        scoringResult?.focusBodyPart ?? (analysisScorable ? frame.focusBodyPart : null),
+      issue:
+        scoringResult?.issue ?? (analysisScorable ? frame.issue : "transition"),
+      wrongBodyParts:
+        scoringResult?.wrongBodyParts || (analysisScorable ? frame.wrongBodyParts : []) || [],
+      advisoryBodyParts:
+        scoringResult?.advisoryBodyParts ||
+        (analysisScorable ? frame.advisoryBodyParts : []) ||
+        [],
       analysisKind: window ? "repetition" : "preparation",
       analysisRep: window?.rep ?? null,
       analysisStep,
@@ -744,11 +890,19 @@ export function buildPracticeSessionAnalysis(
       !steps.length || detectedSteps.size >= steps.length;
     const status =
       window.classifier_completion_signal ||
+      window.strict_completion_signal ||
       (hasCompletionSignal && hasFullStepCoverage)
         ? "completed"
         : hasCompletionSignal
           ? "partial"
           : "incomplete";
+    const strictRepetition = window.strict_driven && Array.isArray(strictSummary?.repetitions)
+      ? strictSummary.repetitions.find(
+          (repetition) => Number(repetition?.rep_id) === Number(window.source_rep)
+        )
+      : null;
+    const strictQuality = Number(strictRepetition?.technique_quality);
+    const strictDurationMs = Number(strictRepetition?.duration_ms);
     return {
       rep,
       status,
@@ -757,12 +911,16 @@ export function buildPracticeSessionAnalysis(
         repSegments[repSegments.length - 1]?.end_frame_index ?? 0,
       start_ms: repSegments[0]?.start_ms ?? 0,
       end_ms: repSegments[repSegments.length - 1]?.end_ms ?? 0,
-      duration_ms: Math.max(
-        0,
-        (repSegments[repSegments.length - 1]?.end_ms ?? 0) -
-          (repSegments[0]?.start_ms ?? 0)
-      ),
-      average_accuracy: finiteAverage(accuracies),
+      duration_ms: Number.isFinite(strictDurationMs)
+        ? strictDurationMs
+        : Math.max(
+            0,
+            (repSegments[repSegments.length - 1]?.end_ms ?? 0) -
+              (repSegments[0]?.start_ms ?? 0)
+          ),
+      average_accuracy: Number.isFinite(strictQuality)
+        ? strictQuality * 100
+        : finiteAverage(accuracies),
       confidence: finiteAverage(
         repFrames.map((frame) => Number(frame.stateConfidence))
       ),
@@ -794,6 +952,11 @@ export function buildPracticeSessionAnalysis(
       step: frame.analysisStep,
       phase: frame.analysisPhase,
       scorable: frame.analysisScorable,
+      accuracy: frame.accuracy,
+      focus_body_part: frame.focusBodyPart,
+      issue: frame.issue,
+      wrong_body_parts: frame.wrongBodyParts,
+      advisory_body_parts: frame.advisoryBodyParts,
       source_rep: frame.sourceRep
     })),
     preparation_duration_ms: preparationSegments.reduce(

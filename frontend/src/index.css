@@ -6391,6 +6391,18 @@ select:focus {
   stroke-width: 1.6;
 }
 
+.practice-tape-skeleton line.is-advisory {
+  stroke: #ffbd59;
+  stroke-width: 3;
+  filter: drop-shadow(0 0 5px rgba(255, 189, 89, .78));
+}
+
+.practice-tape-skeleton circle.is-advisory {
+  fill: #fff0cf;
+  stroke: #ffbd59;
+  stroke-width: 1.35;
+}
+
 .practice-tape-skeleton text {
   fill: #536472;
   font-size: 9px;
@@ -6750,6 +6762,12 @@ select:focus {
   border-color: rgba(255, 93, 104, .48);
   color: #ff8991;
   background: rgba(255, 93, 104, .09);
+}
+
+.practice-selected-frame__heading > span.is-advisory {
+  border-color: rgba(255, 189, 89, .48);
+  color: #ffd184;
+  background: rgba(255, 189, 89, .09);
 }
 
 .practice-selected-frame__heading > span.is-transition {
@@ -7216,6 +7234,11 @@ select:focus {
 .practice-session-analysis__legend i.is-wrong {
   background: #ff5d68;
   box-shadow: 0 0 7px rgba(255, 93, 104, .7);
+}
+
+.practice-session-analysis__legend i.is-advisory {
+  background: #ffbd59;
+  box-shadow: 0 0 7px rgba(255, 189, 89, .65);
 }
 
 .practice-camera-roll-heading {

@@ -12,6 +12,7 @@ const frame = ({
   rep = 1,
   step = 1,
   temporalPhase,
+  phase = "keyframe",
   completedRep = null,
   matchedStep = null,
   stepScores = [],
@@ -20,12 +21,16 @@ const frame = ({
   countTimestampMs = null,
   sourceTimestampMs = null,
   postSessionClassified = false,
-  rule = null
+  rule = null,
+  angles = {},
+  wrongBodyParts = [],
+  advisoryBodyParts = []
 }) => ({
   elapsedMs,
   rep,
   step,
   temporalPhase,
+  phase,
   completedRep,
   matchedStep,
   stepScores,
@@ -34,6 +39,9 @@ const frame = ({
   countTimestampMs,
   sourceTimestampMs: sourceTimestampMs ?? elapsedMs,
   postSessionClassified,
+  angles,
+  wrongBodyParts,
+  advisoryBodyParts,
   trackingReliable: true,
   ruleEngineAnalysis: rule ? { corrected: rule } : null
 });
@@ -96,6 +104,103 @@ test("completion evidence with a missing opening step is marked as a partial tap
   assert.equal(analysis.repetitions[0].status, "partial");
   assert.equal(analysis.repetitions[0].step_coverage_percentage, 67);
   assert.equal(analysis.clustered_completed_repetitions, 0);
+});
+
+test("strict replay recovers repetitions that pose clustering left as preparation", () => {
+  const strictFrame = (elapsedMs, angle, rule) => frame({
+    elapsedMs,
+    temporalPhase: "seeking_step",
+    angles: { elbow_left: angle },
+    rule
+  });
+  const frames = [];
+  [0, 1].forEach((offset) => {
+    const rep = offset + 1;
+    const start = offset * 1000;
+    frames.push(
+      strictFrame(start, 90, {
+        rep_id: null,
+        rep_state: "WAITING",
+        step: "GUARD",
+        canonical_phase: "PREPARATION"
+      }),
+      strictFrame(start + 100, 135, {
+        rep_id: rep,
+        rep_state: "REP_STARTED",
+        step: "EXTENSION",
+        canonical_phase: "EXTENSION"
+      }),
+      strictFrame(start + 200, rep === 1 ? 179 : 170, {
+        rep_id: rep,
+        rep_state: "REP_ACTIVE",
+        step: "FULL_EXTENSION",
+        canonical_phase: "PEAK"
+      }),
+      strictFrame(start + 300, 130, {
+        rep_id: rep,
+        rep_state: "REP_ACTIVE",
+        step: "RETRACTION",
+        canonical_phase: "RETRACTION"
+      }),
+      strictFrame(start + 400, 90, {
+        rep_id: rep,
+        rep_state: "REP_COMPLETED",
+        step: "RECOVERY",
+        canonical_phase: "RECOVERY"
+      })
+    );
+  });
+  const steps = [
+    { step_name: "Guard", angles: [{ body_part: "elbow_left", min: 70, max: 110 }] },
+    {
+      step_name: "Extension",
+      angles: [{
+        body_part: "elbow_left",
+        min: 155,
+        max: 177,
+        measurement_tolerance_deg: 3
+      }]
+    },
+    { step_name: "Recovery", angles: [{ body_part: "elbow_left", min: 70, max: 110 }] }
+  ];
+
+  const analysis = buildPracticeSessionAnalysis(frames, {
+    steps,
+    targetReps: 2,
+    strictSummary: { completed_repetitions: 2, aborted_repetitions: 0 }
+  });
+
+  assert.equal(analysis.clustered_completed_repetitions, 2);
+  assert.deepEqual(analysis.repetitions.map((rep) => rep.status), ["completed", "completed"]);
+  assert.equal(analysis.frame_assignments[2].step, 2);
+  assert.equal(analysis.frame_assignments[2].phase, "step_peak");
+  assert.deepEqual(analysis.frame_assignments[2].advisory_body_parts, ["elbow_left"]);
+  assert.equal(analysis.frame_assignments[3].step, 3);
+  assert.equal(analysis.frame_assignments[3].scorable, false);
+});
+
+test("canonical entry frames are preserved but excluded from endpoint scoring", () => {
+  const analysis = buildPracticeSessionAnalysis([
+    frame({ elapsedMs: 0, step: 1, temporalPhase: "step_hold", matchedStep: 1 }),
+    frame({
+      elapsedMs: 100,
+      step: 2,
+      temporalPhase: "step_enter",
+      phase: "transition",
+      scorable: true,
+      accuracy: 90
+    }),
+    frame({ elapsedMs: 200, step: 2, temporalPhase: "step_peak", matchedStep: 2, scorable: true, accuracy: 96 }),
+    frame({ elapsedMs: 300, step: 3, temporalPhase: "rep_complete", matchedStep: 3, completedRep: 1 })
+  ], {
+    steps: [{}, {}, {}],
+    targetReps: 1
+  });
+
+  const transition = analysis.frame_assignments[1];
+  assert.equal(transition.phase, "step_enter");
+  assert.equal(transition.step, 2);
+  assert.equal(transition.scorable, false);
 });
 
 test("classifier completion follows the completed rep after the classifier advances", () => {

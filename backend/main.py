@@ -50,6 +50,7 @@ from routers import contact as contact_router
 from routers import dashboard as dashboard_router
 from routers import privacy as privacy_router
 from routers import database_sync as database_sync_router
+from routers import admin_catalog as admin_catalog_router
 
 # Services
 from services.angle_service import compare_angles
@@ -221,6 +222,7 @@ app.include_router(contact_router.router)
 app.include_router(dashboard_router.router)
 app.include_router(privacy_router.router)
 app.include_router(database_sync_router.router)
+app.include_router(admin_catalog_router.router)
 
 
 # -----------------------------
@@ -1067,6 +1069,13 @@ def get_practice_analysis(
             PracticeSessionVideo.practice_session_id.in_(session_ids)
         ).all()
     } if session_ids else {}
+    session_tape_ids = {
+        tape_id
+        for (tape_id,) in db.query(PracticeSessionTape.practice_session_id).filter(
+            PracticeSessionTape.practice_session_id.in_(session_ids),
+            PracticeSessionTape.upload_status == "ready",
+        ).all()
+    } if session_ids else set()
     reps = []
     if session_ids:
         reps = db.query(PracticeRep).filter(
@@ -1258,6 +1267,7 @@ def get_practice_analysis(
                 session,
                 session_analytics.get(session.id),
                 session_videos.get(session.id),
+                tape_available=session.id in session_tape_ids,
             )
             for session in sessions
         ]
@@ -1807,7 +1817,7 @@ def _practice_consistency_score(reps):
     return max(0, min(100, 100 - (variance ** 0.5)))
 
 
-def _practice_session_payload(session, analytics=None, video=None):
+def _practice_session_payload(session, analytics=None, video=None, tape_available=None):
     completed_reps = canonical_practice_rep_count(session, analytics)
     average_accuracy = canonical_practice_accuracy(session, analytics)
     payload = {
@@ -1835,6 +1845,8 @@ def _practice_session_payload(session, analytics=None, video=None):
         payload["analytics"] = analytics
     if video:
         payload["raw_video"] = _practice_video_metadata(video)
+    if tape_available is not None:
+        payload["tape_available"] = bool(tape_available)
     return payload
 
 

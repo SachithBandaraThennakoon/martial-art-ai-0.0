@@ -1,6 +1,8 @@
 import unittest
 
 from services.technique_package_loader import (
+    TECHNIQUE_ROOT,
+    load_admin_technique_packages,
     load_technique_catalog,
     load_technique_packages,
 )
@@ -41,6 +43,17 @@ class TechniqueDatasetTests(unittest.TestCase):
         for package in self.packages:
             with self.subTest(technique=package["catalog"]["name"]):
                 self.assertTrue(package["source_file"].is_file())
+
+    def test_admin_catalog_includes_draft_source_records(self):
+        packages = load_admin_technique_packages()
+        self.assertGreater(len(packages), len(self.packages))
+        self.assertEqual(
+            len(packages),
+            len(list((TECHNIQUE_ROOT / "techniques").glob("*.json"))),
+        )
+        self.assertTrue(all(package["id"] for package in packages))
+        self.assertTrue(all("catalog" in package for package in packages))
+        self.assertTrue(all("training_steps" in package for package in packages))
 
     def test_technique_names_are_unique(self):
         names = [technique["name"] for technique in self.techniques]

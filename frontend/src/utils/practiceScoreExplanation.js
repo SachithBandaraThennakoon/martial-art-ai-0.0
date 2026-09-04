@@ -13,6 +13,12 @@ const issueExplanation = (bodyPart, issue) => {
   if (issue === "too_open") {
     return `${label} was more open or extended than the target range for this step.`;
   }
+  if (issue === "near_upper_limit") {
+    return `${label} was close to the upper target boundary. Treat this as an advisory unless it persists across the movement peak.`;
+  }
+  if (issue === "near_lower_limit") {
+    return `${label} was close to the lower target boundary. Treat this as an advisory unless it persists.`;
+  }
   if (issue === "missing") {
     return `${label} could not be measured reliably in this frame.`;
   }
@@ -45,7 +51,9 @@ export function buildPracticeScoreExplanation(
   }
 
   const wrongBodyParts = [...new Set(frame.wrongBodyParts || [])];
-  const focusBodyPart = frame.focusBodyPart || wrongBodyParts[0] || null;
+  const advisoryBodyParts = [...new Set(frame.advisoryBodyParts || [])];
+  const focusBodyPart =
+    frame.focusBodyPart || wrongBodyParts[0] || advisoryBodyParts[0] || null;
   const issue = frame.issue || null;
   const target = (step?.angles || []).find(
     (item) => item?.body_part === focusBodyPart
@@ -74,10 +82,15 @@ export function buildPracticeScoreExplanation(
   }
 
   const needsReview = accuracy < cleanAccuracy || wrongBodyParts.length > 0;
+  const isAdvisory = !needsReview && advisoryBodyParts.length > 0;
   return {
-    tone: needsReview ? "warning" : "clean",
-    title: needsReview ? "Why this score is low" : "Why this frame is clean",
-    summary: needsReview
+    tone: needsReview ? "warning" : isAdvisory ? "advisory" : "clean",
+    title: needsReview
+      ? "Why this score is low"
+      : isAdvisory
+        ? "Near target boundary"
+        : "Why this frame is clean",
+    summary: needsReview || isAdvisory
       ? details[0] || "One or more required targets were outside range."
       : "All measured targets used by this step were within their configured ranges.",
     details: details.slice(1)

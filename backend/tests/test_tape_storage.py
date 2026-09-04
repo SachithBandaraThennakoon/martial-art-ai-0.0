@@ -108,10 +108,14 @@ class TapeStorageValidationTests(unittest.TestCase):
             "observed": {"confidence": 0.94},
             "forecast": {"horizon_ms": 200, "risk": 0.12},
         }
-
         parsed, _digest = parse_and_validate_tape(json.dumps(document).encode())
-
         self.assertEqual(parsed["frames"][0]["af"]["forecast"]["horizon_ms"], 200)
+
+    def test_frontend_angle_advisory_field_is_allowed(self):
+        document = valid_document()
+        document["frames"][0]["aw"] = ["elbow_left"]
+        parsed, _digest = parse_and_validate_tape(json.dumps(document).encode())
+        self.assertEqual(parsed["frames"][0]["aw"], ["elbow_left"])
 
     def test_rule_engine_quality_evidence_depth_is_allowed(self):
         document = valid_document()

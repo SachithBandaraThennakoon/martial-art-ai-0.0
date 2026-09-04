@@ -37,6 +37,7 @@ const decodeFrame = (frame, index) => ({
   focusBodyPart: frame.f || null,
   issue: frame.i || null,
   wrongBodyParts: frame.w || [],
+  advisoryBodyParts: frame.aw || [],
   angles: Object.fromEntries(
     Object.entries(frame.av || {}).map(([name, value]) => [
       name,
@@ -107,9 +108,12 @@ export default function StoredSessionTapePanel({
   session
 }) {
   const sessionId = practiceSessionId(session);
+  const tapeKnownMissing = session?.tape_available === false;
   const [expanded, setExpanded] = useState(defaultExpanded);
-  const [loadState, setLoadState] = useState("idle");
-  const [message, setMessage] = useState("");
+  const [loadState, setLoadState] = useState(tapeKnownMissing ? "missing" : "idle");
+  const [message, setMessage] = useState(
+    tapeKnownMissing ? "No frame tape was stored for this session." : ""
+  );
   const [tape, setTape] = useState(null);
   const [selectedFrame, setSelectedFrame] = useState(0);
 
@@ -135,7 +139,7 @@ export default function StoredSessionTapePanel({
       setLoadState("ready");
       setMessage("");
     } catch (error) {
-      setLoadState("error");
+      setLoadState(error.message === "missing" ? "missing" : "error");
       setMessage(
         error.message === "missing"
           ? "No frame tape was stored for this session."
@@ -171,10 +175,11 @@ export default function StoredSessionTapePanel({
       frames.length
         ? buildPracticeSessionAnalysis(frames, {
             steps,
-            targetReps: session?.target_reps
+            targetReps: session?.target_reps,
+            strictSummary: tape?.metadata?.ruleEngineAnalysis?.summary || null
           })
         : null,
-    [frames, session?.target_reps, steps]
+    [frames, session?.target_reps, steps, tape?.metadata?.ruleEngineAnalysis?.summary]
   );
   const currentFrame = frames[selectedFrame] || null;
   const assignment = analysis?.frame_assignments?.[selectedFrame] || null;
@@ -220,6 +225,9 @@ export default function StoredSessionTapePanel({
       {expanded ? (
         <div className="stored-tape-panel__body">
           {loadState === "loading" ? <p className="stored-tape-panel__state">{message}</p> : null}
+          {loadState === "missing" ? (
+            <p className="stored-tape-panel__state">{message}</p>
+          ) : null}
           {loadState === "error" ? (
             <div className="stored-tape-panel__state is-error">
               <p>{message}</p>

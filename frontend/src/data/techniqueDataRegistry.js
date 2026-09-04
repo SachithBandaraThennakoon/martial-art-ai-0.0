@@ -25,10 +25,13 @@ function buildDataPackage(filePath, record) {
       // Backward-compatible shape for the original angle-only feedback path.
       angles: step.angles?.length
         ? step.angles
-        : (step.angle_targets || []).map(({ body_part, min, max }) => ({
-            body_part,
-            min,
-            max
+        : (step.angle_targets || []).map((target) => ({
+            body_part: target.body_part,
+            min: target.min,
+            max: target.max,
+            ...(target.measurement_tolerance_deg != null
+              ? { measurement_tolerance_deg: target.measurement_tolerance_deg }
+              : {})
           }))
     }))
   };

@@ -280,6 +280,7 @@ const encodePracticeTapeFrame = (frame) => ({
   f: frame.focusBodyPart || null,
   i: frame.issue || null,
   w: frame.wrongBodyParts || [],
+  aw: frame.advisoryBodyParts || [],
   p: encodePoseLandmarks(frame.landmarks),
   op: encodePoseLandmarks(frame.observedLandmarks),
   wp: encodePoseLandmarks(frame.measurementLandmarks),
@@ -376,6 +377,7 @@ const decodePracticeTapeFrame = (frame, index) => ({
   focusBodyPart: frame.f || null,
   issue: frame.i || null,
   wrongBodyParts: frame.w || [],
+  advisoryBodyParts: frame.aw || [],
   landmarks: decodePoseLandmarks(frame.p),
   observedLandmarks: decodePoseLandmarks(frame.op),
   measurementLandmarks: decodePoseLandmarks(frame.wp),
@@ -515,7 +517,8 @@ const analyzePracticeTape = ({
         accuracy: null,
         focusBodyPart: null,
         issue: "transition",
-        wrongBodyParts: []
+        wrongBodyParts: [],
+        advisoryBodyParts: []
       };
     }
 
@@ -531,7 +534,8 @@ const analyzePracticeTape = ({
       accuracy: result.accuracy,
       focusBodyPart: result.focusBodyPart,
       issue: result.issue,
-      wrongBodyParts: result.wrongBodyParts
+      wrongBodyParts: result.wrongBodyParts,
+      advisoryBodyParts: result.advisoryBodyParts
     };
   });
 
@@ -620,6 +624,7 @@ const getPoseMotion = (previous = [], current = []) => {
 };
 
 function TapeSkeleton({
+  advisoryBodyParts = [],
   facePoints = [],
   handPoints = {},
   highlightBodyPart,
@@ -631,6 +636,11 @@ function TapeSkeleton({
   const points = Array.isArray(landmarks) ? landmarks : [];
   const highlightedJoints = new Set(
     [highlightBodyPart, ...highlightBodyParts]
+      .filter(Boolean)
+      .flatMap((bodyPart) => TAPE_HIGHLIGHT_JOINTS[bodyPart] || [])
+  );
+  const advisoryJoints = new Set(
+    advisoryBodyParts
       .filter(Boolean)
       .flatMap((bodyPart) => TAPE_HIGHLIGHT_JOINTS[bodyPart] || [])
   );
@@ -658,6 +668,8 @@ function TapeSkeleton({
       );
   const isFaceWrong = ["eyes_forward", "face_forward", "face_calm"]
     .some((part) => highlightBodyPart === part || highlightBodyParts.includes(part));
+  const isFaceAdvisory = ["eyes_forward", "face_forward", "face_calm"]
+    .some((part) => advisoryBodyParts.includes(part));
 
   return (
     <svg
@@ -670,7 +682,7 @@ function TapeSkeleton({
         const end = detailPoint(faceMap.get(to));
         return start && end ? (
           <line
-            className={`is-detail ${isFaceWrong ? "is-wrong" : ""}`}
+            className={`is-detail ${isFaceWrong ? "is-wrong" : isFaceAdvisory ? "is-advisory" : ""}`}
             key={`face-${from}-${to}`}
             x1={start.x}
             x2={end.x}
@@ -685,12 +697,14 @@ function TapeSkeleton({
         const connections = poseHand ? [[0, 4], [0, 8], [0, 20]] : TAPE_HAND_CONNECTIONS;
         const handWrong = [`fist_${side}`, `hand_${side}_open`, `wrist_${side}`]
           .some((part) => highlightBodyPart === part || highlightBodyParts.includes(part));
+        const handAdvisory = [`fist_${side}`, `hand_${side}_open`, `wrist_${side}`]
+          .some((part) => advisoryBodyParts.includes(part));
         return connections.map(([from, to]) => {
           const start = detailPoint(handMap.get(from));
           const end = detailPoint(handMap.get(to));
           return start && end ? (
             <line
-              className={`is-detail ${handWrong ? "is-wrong" : ""}`}
+              className={`is-detail ${handWrong ? "is-wrong" : handAdvisory ? "is-advisory" : ""}`}
               key={`hand-${side}-${from}-${to}`}
               x1={start.x}
               x2={end.x}
@@ -705,7 +719,13 @@ function TapeSkeleton({
         const end = pointAt(to);
         return start && end ? (
           <line
-            className={highlightedJoints.has(from) || highlightedJoints.has(to) ? "is-wrong" : ""}
+            className={
+              highlightedJoints.has(from) && highlightedJoints.has(to)
+                ? "is-wrong"
+                : advisoryJoints.has(from) && advisoryJoints.has(to)
+                  ? "is-advisory"
+                  : ""
+            }
             key={`${from}-${to}`}
             x1={start.x}
             x2={end.x}
@@ -718,7 +738,13 @@ function TapeSkeleton({
         const point = pointAt(index);
         return point ? (
           <circle
-            className={highlightedJoints.has(index) ? "is-wrong" : ""}
+            className={
+              highlightedJoints.has(index)
+                ? "is-wrong"
+                : advisoryJoints.has(index)
+                  ? "is-advisory"
+                  : ""
+            }
             cx={point.x}
             cy={point.y}
             key={index}
@@ -732,7 +758,7 @@ function TapeSkeleton({
           const position = detailPoint(point);
           return position ? (
             <circle
-              className={`is-detail ${isFaceWrong ? "is-wrong" : ""}`}
+              className={`is-detail ${isFaceWrong ? "is-wrong" : isFaceAdvisory ? "is-advisory" : ""}`}
               cx={position.x}
               cy={position.y}
               key={`face-point-${point.index}`}
@@ -1041,6 +1067,9 @@ export default function PracticeMode({
   const quickVideoStartedRef = useRef(false);
   const uploadedAnalysisTimingRef = useRef({
     startedAtMs: null,
+    requestedAtMs: null,
+    startupDelayMs: 0,
+    mediaStartedAtMs: 0,
     durationMs: 0,
     completion: null
   });
@@ -1151,7 +1180,8 @@ export default function PracticeMode({
     accuracy: 0,
     focusBodyPart: null,
     issue: "waiting",
-    wrongBodyParts: []
+    wrongBodyParts: [],
+    advisoryBodyParts: []
   });
   const movementClassifierRef = useRef(null);
   const latestMovementClassificationRef = useRef({
@@ -1291,6 +1321,16 @@ export default function PracticeMode({
         analysisKind: assignment?.kind || "preparation",
         analysisRep: assignment?.rep ?? null,
         scorable: assignment?.scorable === true,
+        accuracy: assignment?.scorable === true ? assignment.accuracy : null,
+        focusBodyPart:
+          assignment?.scorable === true ? assignment.focus_body_part : null,
+        issue: assignment?.scorable === true ? assignment.issue : "transition",
+        wrongBodyParts:
+          assignment?.scorable === true ? assignment.wrong_body_parts || [] : [],
+        advisoryBodyParts:
+          assignment?.scorable === true
+            ? assignment.advisory_body_parts || []
+            : [],
         sourceStep: frame.step,
         step: assignment ? assignment.step : frame.step,
         sourceTemporalPhase: frame.temporalPhase,
@@ -1317,12 +1357,21 @@ export default function PracticeMode({
     fullTapeFrame?.scorable !== false &&
     Number.isFinite(fullTapeFrame?.accuracy);
   const fullTapeFrameRuleErrors = getFrameRuleErrors(fullTapeFrame);
+  const fullTapeFrameWrongBodyParts = Array.isArray(fullTapeFrame?.wrongBodyParts)
+    ? fullTapeFrame.wrongBodyParts.filter(Boolean)
+    : [];
+  const fullTapeFrameAdvisoryBodyParts = Array.isArray(fullTapeFrame?.advisoryBodyParts)
+    ? fullTapeFrame.advisoryBodyParts.filter(Boolean)
+    : [];
+  const fullTapeFrameHasAdvisory =
+    fullTapeFrameScorable && fullTapeFrameAdvisoryBodyParts.length > 0;
   const fullTapeFrameNeedsReview =
     fullTapeFrameScorable &&
     (
       fullTapeFrameScorable &&
       fullTapeFrame.accuracy < CLEAN_ACCURACY
-    || fullTapeFrameRuleErrors.length > 0
+      || fullTapeFrameRuleErrors.length > 0
+      || fullTapeFrameWrongBodyParts.length > 0
     );
   const filteredTapeFrames = filterPracticeTapeFrames(analysisTapeFrames, {
     rep: analysisCountFilter,
@@ -1379,7 +1428,8 @@ export default function PracticeMode({
         frame.scorable !== false &&
         Number.isFinite(frame.accuracy) &&
         frame.accuracy < CLEAN_ACCURACY
-      || getFrameRuleErrors(frame).length > 0
+        || getFrameRuleErrors(frame).length > 0
+        || (Array.isArray(frame.wrongBodyParts) && frame.wrongBodyParts.length > 0)
       )
   ).length;
   const fullTapeIssueCounts = analysisTapeFrames
@@ -2455,7 +2505,13 @@ export default function PracticeMode({
               : uploadedRun?.status || "uploaded_video_analysis_failed",
             frameCount: uploadedTiming.uniqueSourceFrames,
             effectiveFps: uploadedTiming.effectiveFps,
-            durationMs: uploadedAnalysisTimingRef.current.durationMs
+            durationMs: uploadedAnalysisTimingRef.current.durationMs,
+            playbackStartupDelayMs: Math.round(
+              uploadedAnalysisTimingRef.current.startupDelayMs || 0
+            ),
+            firstMediaTimestampMs: Math.round(
+              uploadedAnalysisTimingRef.current.mediaStartedAtMs || 0
+            )
           };
           if (uploadCompleted) {
             videoReplayMetadata = {
@@ -2466,6 +2522,13 @@ export default function PracticeMode({
               sampleFps: 30,
               sourceVideoFps: null,
               durationMs: uploadedAnalysisTimingRef.current.durationMs,
+              playbackStartedAtMs: uploadedAnalysisTimingRef.current.startedAtMs,
+              playbackStartupDelayMs: Math.round(
+                uploadedAnalysisTimingRef.current.startupDelayMs || 0
+              ),
+              firstMediaTimestampMs: Math.round(
+                uploadedAnalysisTimingRef.current.mediaStartedAtMs || 0
+              ),
               retained: false,
               storage: null
             };
@@ -2513,9 +2576,23 @@ export default function PracticeMode({
               ? "elbow_left"
               : null
         });
-        const correctedAnalysis = buildPracticeSessionAnalysis(analyzedTape, {
+        // Finalize the session only after the deterministic replay is ready.
+        // Otherwise an early pose-cluster result can be persisted before the
+        // strict engine recovers fast repetitions from the same tape.
+        const liveRuleEngineResult = await waitForRuleEngineResult();
+        const trackingPackage = getTechniqueTrackingPackage(currentTechnique);
+        const replayedRuleEngineResult = trackingPackage
+          ? reanalyzePracticeTapeWithRuleEngine(analyzedTape, trackingPackage)
+          : null;
+        const ruleEngineResult = replayedRuleEngineResult || liveRuleEngineResult;
+        const verifiedTape = ruleEngineResult
+          ? attachRuleEngineAnalysisToTape(analyzedTape, ruleEngineResult)
+          : analyzedTape;
+        const strictSummary = ruleEngineResult?.ruleEngineAnalysis?.summary || null;
+        const correctedAnalysis = buildPracticeSessionAnalysis(verifiedTape, {
           steps,
-          targetReps
+          targetReps,
+          strictSummary
         });
         const correctedSummary = buildPracticeSessionMetrics(
           correctedAnalysis,
@@ -2588,7 +2665,9 @@ export default function PracticeMode({
               body_part: angle.body_part,
               min: angle.min,
               max: angle.max,
-              target_angle: angle.target_angle ?? null
+              target_angle: angle.target_angle ?? null,
+              measurement_tolerance_deg:
+                angle.measurement_tolerance_deg ?? null
             }))
           }))
         };
@@ -2612,16 +2691,6 @@ export default function PracticeMode({
           completed ? "completed" : "cancelled",
           correctedSummary
         );
-        const liveRuleEngineResult = await waitForRuleEngineResult();
-        const trackingPackage = getTechniqueTrackingPackage(currentTechnique);
-        const replayedRuleEngineResult = trackingPackage
-          ? reanalyzePracticeTapeWithRuleEngine(analyzedTape, trackingPackage)
-          : null;
-        const ruleEngineResult =
-          replayedRuleEngineResult || liveRuleEngineResult;
-        const verifiedTape = ruleEngineResult
-          ? attachRuleEngineAnalysisToTape(analyzedTape, ruleEngineResult)
-          : analyzedTape;
         const verifiedMetadata = {
           ...tapeMetadata,
           authoritativeSession: sessionRef.current || null,
@@ -2674,7 +2743,11 @@ export default function PracticeMode({
         }) + PRACTICE_FINAL_ANALYSIS_GRACE_MS - performance.now(),
         inputSource === "video" && Number.isFinite(uploadedAnalysisTimingRef.current.startedAtMs)
           ? uploadedAnalysisTimingRef.current.startedAtMs
-            + uploadedAnalysisTimingRef.current.durationMs
+            + Math.max(
+              0,
+              uploadedAnalysisTimingRef.current.durationMs
+                - uploadedAnalysisTimingRef.current.mediaStartedAtMs
+            )
             + PRACTICE_FINAL_ANALYSIS_GRACE_MS
             - performance.now()
           : 0
@@ -2748,6 +2821,9 @@ export default function PracticeMode({
           : "transition",
         wrongBodyParts: movementClassification.scorable
           ? [...(latestPracticeResultRef.current.wrongBodyParts || [])]
+          : [],
+        advisoryBodyParts: movementClassification.scorable
+          ? [...(latestPracticeResultRef.current.advisoryBodyParts || [])]
           : [],
         landmarks,
         observedLandmarks: (holisticFrame.observedPose || [])
@@ -2853,6 +2929,9 @@ export default function PracticeMode({
     countScheduleStartedAtRef.current = null;
     uploadedAnalysisTimingRef.current = {
       startedAtMs: null,
+      requestedAtMs: null,
+      startupDelayMs: 0,
+      mediaStartedAtMs: 0,
       durationMs: 0,
       completion: null
     };
@@ -2991,14 +3070,21 @@ export default function PracticeMode({
       recordedFramesRef.current = [];
       previousRecordedLandmarksRef.current = [];
       classificationArmedAtElapsedMsRef.current = 0;
-      const uploadStartedAtMs = performance.now();
+      const uploadRequestedAtMs = performance.now();
       const uploaded = await practiceVideoControllerRef.current?.restartUploaded?.();
       if (!uploaded) {
         setAssistantMessage("The uploaded video is not ready. Choose it again and retry.");
         return;
       }
       uploadedAnalysisTimingRef.current = {
-        startedAtMs: uploadStartedAtMs,
+        startedAtMs: Number.isFinite(uploaded.startedAtMs)
+          ? uploaded.startedAtMs
+          : performance.now(),
+        requestedAtMs: uploadRequestedAtMs,
+        startupDelayMs: Number.isFinite(uploaded.startedAtMs)
+          ? Math.max(0, uploaded.startedAtMs - uploadRequestedAtMs)
+          : 0,
+        mediaStartedAtMs: Math.max(0, Number(uploaded.mediaStartedAtMs) || 0),
         durationMs: Number(uploaded.durationMs) || 0,
         completion: uploaded.completion || null
       };
@@ -3471,7 +3557,8 @@ export default function PracticeMode({
         displayedFrames,
         {
           steps: restoredSteps,
-          targetReps: authoritativeHistorySession.target_reps
+          targetReps: authoritativeHistorySession.target_reps,
+          strictSummary: ruleEngineAnalysis?.summary || null
         }
       );
       const correctedHistorySummary = buildPracticeSessionMetrics(
@@ -4151,7 +4238,7 @@ export default function PracticeMode({
                         ruleBased: ruleEngineSession || null,
                         selectedFrame: fullTapeFrame || null
                       },
-                      frames: fullTapeFrames
+                      frames: analysisTapeFrames
                     },
                     `${techniqueFilePart || "practice"}-session-analysis.json`
                   );
@@ -4266,23 +4353,26 @@ export default function PracticeMode({
                   <p className="eyebrow">Selected frame</p>
                   <strong>Frame {fullTapeCursor + 1}</strong>
                 </div>
-                <span className={!fullTapeFrameScorable ? "is-transition" : fullTapeFrameNeedsReview ? "is-review" : "is-clean"}>
+                <span className={!fullTapeFrameScorable ? "is-transition" : fullTapeFrameNeedsReview ? "is-review" : fullTapeFrameHasAdvisory ? "is-advisory" : "is-clean"}>
                   {!fullTapeFrameScorable
                     ? formatTemporalPhase(fullTapeFrame?.temporalPhase)
                     : fullTapeFrameNeedsReview
                       ? "Review"
+                      : fullTapeFrameHasAdvisory
+                        ? "Advisory"
                       : "Clean"}
                 </span>
               </div>
               <TapeSkeleton
+                advisoryBodyParts={fullTapeFrameAdvisoryBodyParts}
                 highlightBodyPart={
                   fullTapeFrameNeedsReview
-                    ? fullTapeFrame?.focusBodyPart
+                    ? fullTapeFrame?.focusBodyPart || fullTapeFrameWrongBodyParts[0]
                     : null
                 }
                 highlightBodyParts={
                   fullTapeFrameNeedsReview
-                    ? fullTapeFrame?.wrongBodyParts
+                    ? fullTapeFrameWrongBodyParts
                     : []
                 }
                 landmarks={fullTapeFrame?.landmarks}
@@ -4351,8 +4441,14 @@ export default function PracticeMode({
                     : displayedFrameRep || "--"}
                   step={fullTapeFrameIsPreparation
                     ? "Preparation"
-                    : fullTapeFrame?.phase === "transition"
-                      ? `Transition to ${fullTapeFrame?.step || "--"}`
+                    : fullTapeFrame?.temporalPhase === "between_steps"
+                      ? Number(fullTapeFrame?.sourceStep) > 1
+                        ? `Transition ${Number(fullTapeFrame.sourceStep) - 1} → ${fullTapeFrame.sourceStep}`
+                        : `Transition to ${fullTapeFrame?.sourceStep || "--"}`
+                    : fullTapeFrame?.temporalPhase === "step_enter"
+                      ? `Entering ${selectedAnalysisStep?.step_name || `Step ${fullTapeFrame?.step || "--"}`}`
+                    : fullTapeFrame?.temporalPhase === "step_exit"
+                      ? `Leaving ${selectedAnalysisStep?.step_name || `Step ${fullTapeFrame?.step || "--"}`}`
                       : selectedAnalysisStep?.step_name || fullTapeFrame?.step || "--"}
                   timestamp={formatTapeTime(fullTapeFrame?.elapsedMs || 0)}
                   tracking={fullTapeFrame?.trackingReliable === false ? "Lost" : "Tracked"}
@@ -4497,6 +4593,8 @@ export default function PracticeMode({
                         .join(" · ")
                     : fullTapeFrameNeedsReview && fullTapeFrame?.focusBodyPart
                     ? `${formatBodyPart(fullTapeFrame.focusBodyPart)} · ${formatBodyPart(fullTapeFrame.issue)}`
+                    : fullTapeFrameHasAdvisory && fullTapeFrame?.focusBodyPart
+                    ? `${formatBodyPart(fullTapeFrame.focusBodyPart)} · near preferred boundary`
                     : "Target angles are within range"}
                 </strong>
               </div>
@@ -4519,6 +4617,7 @@ export default function PracticeMode({
               </div>
               <div className="practice-session-analysis__legend" aria-label="Skeleton analysis legend">
                 <span><i className="is-correct" /> Correct bone</span>
+                <span><i className="is-advisory" /> Near target boundary</span>
                 <span><i className="is-wrong" /> Incorrect angle</span>
               </div>
             </div>
@@ -4714,9 +4813,16 @@ export default function PracticeMode({
               const isScorable =
                 frame.scorable !== false && Number.isFinite(frame.accuracy);
               const frameRuleErrors = getFrameRuleErrors(frame);
+              const frameWrongBodyParts = Array.isArray(frame.wrongBodyParts)
+                ? frame.wrongBodyParts.filter(Boolean)
+                : [];
+              const frameAdvisoryBodyParts = Array.isArray(frame.advisoryBodyParts)
+                ? frame.advisoryBodyParts.filter(Boolean)
+                : [];
               const needsReview =
                 (isScorable && frame.accuracy < CLEAN_ACCURACY) ||
-                frameRuleErrors.length > 0;
+                frameRuleErrors.length > 0 ||
+                frameWrongBodyParts.length > 0;
               return (
                 <button
                   aria-label={`Frame ${frame.frame}, ${frameIsPreparation ? "preparation" : `rep ${frame.analysisRep}, step ${frame.step}`}, ${isScorable ? `${frame.accuracy}% accuracy` : "movement transition"}`}
@@ -4729,11 +4835,12 @@ export default function PracticeMode({
                   type="button"
                 >
                   <TapeSkeleton
+                    advisoryBodyParts={frameAdvisoryBodyParts}
                     highlightBodyPart={
-                      needsReview ? frame.focusBodyPart : null
+                      needsReview ? frame.focusBodyPart || frameWrongBodyParts[0] : null
                     }
                     highlightBodyParts={
-                      needsReview ? frame.wrongBodyParts : []
+                      needsReview ? frameWrongBodyParts : []
                     }
                     landmarks={frame.landmarks}
                     mirrored={displayMirrored}

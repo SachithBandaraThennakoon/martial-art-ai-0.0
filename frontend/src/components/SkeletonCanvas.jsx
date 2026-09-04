@@ -1292,10 +1292,14 @@ export default function SkeletonCanvas({
             1,
             Math.max(0.25, Number(uploadedPlaybackRate) || 1)
           );
-          await videoRef.current.play();
+          const playing = waitForVideoEvent(videoRef.current, "playing");
+          await Promise.all([videoRef.current.play(), playing]);
+          const startedAtMs = performance.now();
           onInputStatus?.(`Playing and analyzing video: ${inputVideoName || "uploaded sample"}`);
           return {
             started: true,
+            startedAtMs,
+            mediaStartedAtMs: Math.max(0, videoRef.current.currentTime * 1000),
             durationMs: durationSeconds * 1000,
             completion
           };

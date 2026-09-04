@@ -66,6 +66,16 @@ class TapeAPITests(unittest.TestCase):
         return {"Authorization": f"Bearer {self.token}", **extra}
 
     def test_inline_intent_store_read_and_idempotent_retry(self):
+        before_store = self.client.get(
+            "/practice/analysis?technique_name=Jab",
+            headers=self.headers(),
+        )
+        self.assertEqual(before_store.status_code, 200)
+        self.assertFalse(before_store.json()["sessions"][0]["tape_available"])
+        dashboard_before_store = self.client.get("/dashboard", headers=self.headers())
+        self.assertEqual(dashboard_before_store.status_code, 200)
+        self.assertFalse(dashboard_before_store.json()["sessions"][0]["tape_available"])
+
         document = valid_document()
         document["metadata"]["sessionId"] = self.session.id
         document["metadata"]["analysisAuthority"] = "recorded-video"
@@ -127,6 +137,16 @@ class TapeAPITests(unittest.TestCase):
         self.assertEqual(loaded.status_code, 200)
         self.assertEqual(len(loaded.json()["frames"]), 2)
         self.assertEqual(loaded.json()["storage"]["capture_source"], "device_estimate")
+
+        after_store = self.client.get(
+            "/practice/analysis?technique_name=Jab",
+            headers=self.headers(),
+        )
+        self.assertEqual(after_store.status_code, 200)
+        self.assertTrue(after_store.json()["sessions"][0]["tape_available"])
+        dashboard_after_store = self.client.get("/dashboard", headers=self.headers())
+        self.assertEqual(dashboard_after_store.status_code, 200)
+        self.assertTrue(dashboard_after_store.json()["sessions"][0]["tape_available"])
 
     def test_invalid_tape_is_rejected_before_persistence(self):
         document = valid_document()

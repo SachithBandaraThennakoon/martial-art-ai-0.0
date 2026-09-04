@@ -11,17 +11,20 @@ export function scorePracticeAngles(requiredParts, liveAngles) {
   const partScores = [];
   let worst = null;
   const wrongBodyParts = [];
+  const advisoryBodyParts = [];
 
   requiredParts.forEach((part) => {
     const value = liveAngles?.[part.body_part];
 
     if (!Number.isFinite(value)) {
       partScores.push(0);
-      worst = worst || {
+      const missing = {
         bodyPart: part.body_part,
         issue: "missing",
-        severity: 100
+        severity: 100,
+        priority: 3
       };
+      if (!worst || missing.priority > (worst.priority || 0)) worst = missing;
       wrongBodyParts.push(part.body_part);
       return;
     }
@@ -36,10 +39,34 @@ export function scorePracticeAngles(requiredParts, liveAngles) {
       issue = "too_open";
     }
 
-    partScores.push(Math.max(0, 100 - diff * 2));
-    if (issue !== "good") wrongBodyParts.push(part.body_part);
-    if (!worst || diff > worst.severity) {
-      worst = { bodyPart: part.body_part, issue, severity: diff };
+    const measurementTolerance = Math.max(
+      0,
+      Number(part.measurement_tolerance_deg) || 0
+    );
+    const isAdvisory = issue !== "good" && diff <= measurementTolerance;
+    const isWrong = issue !== "good" && !isAdvisory;
+
+    // Values inside the configured measurement tolerance are biomechanically
+    // close to the preferred range and should not lose points because of
+    // normal single-camera landmark jitter.
+    partScores.push(isAdvisory ? 100 : Math.max(0, 100 - diff * 2));
+    if (isAdvisory) advisoryBodyParts.push(part.body_part);
+    if (isWrong) wrongBodyParts.push(part.body_part);
+
+    const candidate = {
+      bodyPart: part.body_part,
+      issue: isAdvisory
+        ? issue === "too_open" ? "near_upper_limit" : "near_lower_limit"
+        : issue,
+      severity: diff,
+      priority: isWrong ? 2 : isAdvisory ? 1 : 0
+    };
+    if (
+      !worst ||
+      candidate.priority > worst.priority ||
+      (candidate.priority === worst.priority && diff > worst.severity)
+    ) {
+      worst = candidate;
     }
   });
 
@@ -54,6 +81,7 @@ export function scorePracticeAngles(requiredParts, liveAngles) {
     accuracy: Math.round(Math.min(averageScore, weakestScore)),
     focusBodyPart: worst?.bodyPart || null,
     issue: worst?.issue || "good",
-    wrongBodyParts
+    wrongBodyParts,
+    advisoryBodyParts
   };
 }

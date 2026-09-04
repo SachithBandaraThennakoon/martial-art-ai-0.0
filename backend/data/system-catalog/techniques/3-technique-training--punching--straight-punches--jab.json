@@ -557,6 +557,7 @@
             "role": "primary",
             "weight": 3,
             "hard_max": 177,
+            "measurement_tolerance_deg": 3,
             "mastery_required": true
           },
           {

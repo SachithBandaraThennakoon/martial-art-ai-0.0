@@ -7,7 +7,13 @@ from sqlalchemy.orm import Session
 from auth_context import get_current_user
 from database import get_db
 from models.technique import Technique
-from models.training_memory import PracticeRep, PracticeSession, TrainingFeedbackEvent, TrainingSession
+from models.training_memory import (
+    PracticeRep,
+    PracticeSession,
+    PracticeSessionTape,
+    TrainingFeedbackEvent,
+    TrainingSession,
+)
 from models.user import User
 from services.practice_analytics import (
     canonical_practice_accuracy,
@@ -128,6 +134,14 @@ def dashboard(
         }
         events = [item for item in events if item.session_id in training_ids]
 
+    available_tape_ids = {
+        session_id
+        for (session_id,) in db.query(PracticeSessionTape.practice_session_id).filter(
+            PracticeSessionTape.practice_session_id.in_(practice_ids),
+            PracticeSessionTape.upload_status == "ready",
+        ).all()
+    } if practice_ids else set()
+
     pace_counts, issue_counts, focus_counts = {}, {}, {}
     for item in reps:
         if item.speed_label:
@@ -221,6 +235,7 @@ def dashboard(
             "corrections_applied": int(analytics.get("corrections_applied") or 0),
             "form_errors": analytics.get("common_form_errors") or [],
             "analytics": analytics or None,
+            "tape_available": item.id in available_tape_ids,
             "started_at": iso(item.started_at), "ended_at": iso(item.ended_at),
         })
 
