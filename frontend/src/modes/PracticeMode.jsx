@@ -1039,7 +1039,11 @@ export default function PracticeMode({
   const [videoPersistenceStatus, setVideoPersistenceStatus] = useState("idle");
   const [uploadedVideoReady, setUploadedVideoReady] = useState(false);
   const quickVideoStartedRef = useRef(false);
-  const uploadedAnalysisTimingRef = useRef({ startedAtMs: null, durationMs: 0 });
+  const uploadedAnalysisTimingRef = useRef({
+    startedAtMs: null,
+    durationMs: 0,
+    completion: null
+  });
   const ruleEngineResultRef = useRef(null);
   const ruleEngineWaitersRef = useRef(new Set());
   const handleRuleEngineSessionComplete = useCallback((summary) => {
@@ -1771,8 +1775,12 @@ export default function PracticeMode({
       setTapeCursor(classification.countedRep - 1);
     }
 
-    if (classification.completedRep) {
+    if (inputSource === "video") {
       recordFrameRef.current?.();
+    }
+
+    if (classification.completedRep) {
+      if (inputSource !== "video") recordFrameRef.current?.();
       window.setTimeout(() => {
         const pendingWrite = completeMovementRepRef.current?.(
           classification.completedRep,
@@ -1786,7 +1794,7 @@ export default function PracticeMode({
         }
       }, 0);
     }
-  }, [diagnosticTraceEnabled, steps]);
+  }, [diagnosticTraceEnabled, inputSource, steps]);
 
   const loadPracticeAnalysis = useCallback(async (signal) => {
     const token = getAccessToken();
@@ -2350,10 +2358,34 @@ export default function PracticeMode({
           return;
         }
 
+        let uploadedRun = null;
+        if (inputSource === "video" && uploadedAnalysisTimingRef.current.completion) {
+          const maximumWaitMs = Math.max(
+            30_000,
+            Number(uploadedAnalysisTimingRef.current.durationMs || 0) * 5
+          );
+          uploadedRun = await Promise.race([
+            uploadedAnalysisTimingRef.current.completion,
+            new Promise((resolve) => window.setTimeout(
+              () => resolve({ completed: false, status: "analysis-timeout" }),
+              maximumWaitMs
+            ))
+          ]);
+        }
+
+        if (
+          sessionRef.current?.status !== "active" &&
+          !isSetFinishingRef.current
+        ) {
+          return;
+        }
+
         isSetFinishingRef.current = true;
-        recordFrameRef.current?.();
+        if (inputSource !== "video") recordFrameRef.current?.();
         const setStart = setStartedAtRef.current || performance.now();
-        const tapeDurationMs = Math.max(0, Math.round(performance.now() - setStart));
+        const tapeDurationMs = inputSource === "video"
+          ? Math.max(0, Math.round(uploadedAnalysisTimingRef.current.durationMs || 0))
+          : Math.max(0, Math.round(performance.now() - setStart));
         let analysisSourceFrames = recordedFramesRef.current;
         let videoReplayMetadata = null;
         let videoReplayDiagnostics = null;
@@ -2410,6 +2442,35 @@ export default function PracticeMode({
                 ? error.message.slice(0, 240)
                 : "recorded_video_analysis_failed"
             };
+            setVideoVerificationStatus("fallback");
+          }
+        }
+        if (inputSource === "video") {
+          const uploadedTiming = summarizePracticeSourceTiming(analysisSourceFrames);
+          const uploadCompleted = uploadedRun?.completed === true;
+          videoReplayDiagnostics = {
+            status: uploadCompleted ? "verified" : "failed",
+            reason: uploadCompleted
+              ? null
+              : uploadedRun?.status || "uploaded_video_analysis_failed",
+            frameCount: uploadedTiming.uniqueSourceFrames,
+            effectiveFps: uploadedTiming.effectiveFps,
+            durationMs: uploadedAnalysisTimingRef.current.durationMs
+          };
+          if (uploadCompleted) {
+            videoReplayMetadata = {
+              authoritative: true,
+              origin: "uploaded-video",
+              frameCount: uploadedTiming.uniqueSourceFrames,
+              effectiveFps: uploadedTiming.effectiveFps,
+              sampleFps: 30,
+              sourceVideoFps: null,
+              durationMs: uploadedAnalysisTimingRef.current.durationMs,
+              retained: false,
+              storage: null
+            };
+            setVideoVerificationStatus("verified");
+          } else {
             setVideoVerificationStatus("fallback");
           }
         }
@@ -2480,7 +2541,7 @@ export default function PracticeMode({
           postSessionClassification: true,
           analysisEngine,
           analysisAuthority: videoReplayMetadata
-            ? "recorded-video"
+            ? inputSource === "video" ? "uploaded-video" : "recorded-video"
             : "live-pose-tape",
           videoReplay: videoReplayMetadata,
           videoReplayDiagnostics,
@@ -2508,10 +2569,12 @@ export default function PracticeMode({
               audioStartLatencyMs: countMarker.audioStartLatencyMs ?? null
             })),
             sourceTiming: summarizePracticeSourceTiming(
-              analysisSourceFrames.filter(
-                (frame) =>
-                  frame.elapsedMs >= classificationArmedAtElapsedMsRef.current
-              )
+              inputSource === "video"
+                ? analysisSourceFrames
+                : analysisSourceFrames.filter(
+                    (frame) =>
+                      frame.elapsedMs >= classificationArmedAtElapsedMsRef.current
+                  )
             )
           },
           captureMarginsMs: {
@@ -2578,7 +2641,9 @@ export default function PracticeMode({
         }
         const averageAccuracy = Math.round(correctedSummary.average_accuracy || 0);
         const cleanCount = correctedSummary.clean_reps || 0;
-        const verificationMessage = videoReplayMetadata
+        const verificationMessage = inputSource === "video" && videoReplayMetadata
+          ? "The result was analyzed from the complete uploaded video."
+          : videoReplayMetadata
           ? storedVideoMetadata
             ? "The result was verified from the recorded set, and the raw video was saved."
             : "The result was verified from the recorded set, but raw-video storage failed."
@@ -2659,8 +2724,12 @@ export default function PracticeMode({
       );
       previousRecordedLandmarksRef.current = landmarks;
       recordedFramesRef.current.push({
-        elapsedMs: now - captureStartedAt,
-        sourceTimestampMs: holisticFrame.timestamp || now,
+        elapsedMs: inputSource === "video"
+          ? Math.max(0, Number(holisticFrame.timestamp) || 0)
+          : now - captureStartedAt,
+        sourceTimestampMs: Number.isFinite(Number(holisticFrame.timestamp))
+          ? Number(holisticFrame.timestamp)
+          : now,
         rep: movementClassification.rep,
         step: movementClassification.step,
         phase: movementClassification.phase,
@@ -2735,10 +2804,12 @@ export default function PracticeMode({
     };
 
     recordFrameRef.current = recordFrame;
-    recordFrame();
-    recordingTimerRef.current = window.setInterval(recordFrame, 1000 / 30);
+    if (inputSource !== "video") {
+      recordFrame();
+      recordingTimerRef.current = window.setInterval(recordFrame, 1000 / 30);
+    }
     return captureStartedAt;
-  }, []);
+  }, [inputSource]);
 
   const startPracticeForStep = useCallback(async (stepIndex = 0, { intro = true } = {}) => {
     if (!currentTechnique) return;
@@ -2780,7 +2851,11 @@ export default function PracticeMode({
     repCountRef.current = 0;
     cueCountRef.current = 0;
     countScheduleStartedAtRef.current = null;
-    uploadedAnalysisTimingRef.current = { startedAtMs: null, durationMs: 0 };
+    uploadedAnalysisTimingRef.current = {
+      startedAtMs: null,
+      durationMs: 0,
+      completion: null
+    };
     classificationArmedAtElapsedMsRef.current = 0;
     // The diagnostic recorder starts at the button press, but movement
     // classification is deliberately unarmed until spoken setup has ended.
@@ -2913,6 +2988,9 @@ export default function PracticeMode({
     setIsReadyForRep(true);
     isReadyForRepRef.current = true;
     if (inputSource === "video") {
+      recordedFramesRef.current = [];
+      previousRecordedLandmarksRef.current = [];
+      classificationArmedAtElapsedMsRef.current = 0;
       const uploadStartedAtMs = performance.now();
       const uploaded = await practiceVideoControllerRef.current?.restartUploaded?.();
       if (!uploaded) {
@@ -2921,7 +2999,8 @@ export default function PracticeMode({
       }
       uploadedAnalysisTimingRef.current = {
         startedAtMs: uploadStartedAtMs,
-        durationMs: Number(uploaded.durationMs) || 0
+        durationMs: Number(uploaded.durationMs) || 0,
+        completion: uploaded.completion || null
       };
     }
     countBeatRef.current?.();

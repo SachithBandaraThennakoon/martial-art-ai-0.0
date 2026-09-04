@@ -389,6 +389,20 @@ function resolveFiniteVideoDuration(video) {
   });
 }
 
+function finishUploadedAnalysis(state, status = "completed") {
+  if (!state) return;
+  state.active = false;
+  state.seeking = false;
+  const resolveCompletion = state.resolveCompletion;
+  state.resolveCompletion = null;
+  resolveCompletion?.({
+    completed: status === "completed",
+    status,
+    durationMs: state.durationMs,
+    processedFrames: state.frameIndex
+  });
+}
+
 function seekVideo(video, timeSeconds) {
   if (!video) return Promise.resolve();
   if (!video.seeking && Math.abs(video.currentTime - timeSeconds) < 0.001) {
@@ -919,7 +933,8 @@ export default function SkeletonCanvas({
     frameIndex: 0,
     lastVideoTimestampMs: null,
     seeking: false,
-    durationMs: null
+    durationMs: null,
+    resolveCompletion: null
   });
   const visionRef = useRef(null);
   const wsRef = useRef(null);
@@ -1258,8 +1273,21 @@ export default function SkeletonCanvas({
           throw new Error("Unable to determine this video's duration.");
         }
         await seekVideo(videoRef.current, 0);
+        finishUploadedAnalysis(uploadedAnalysisRef.current, "restarted");
+        let resolveCompletion;
+        const completion = new Promise((resolve) => {
+          resolveCompletion = resolve;
+        });
         if (uploadedPlaybackMode === "realtime") {
-          uploadedAnalysisRef.current.active = false;
+          uploadedAnalysisRef.current = {
+            active: false,
+            sampleIntervalMs: 1000 / 30,
+            frameIndex: 0,
+            lastVideoTimestampMs: null,
+            seeking: false,
+            durationMs: durationSeconds * 1000,
+            resolveCompletion
+          };
           videoRef.current.playbackRate = Math.min(
             1,
             Math.max(0.25, Number(uploadedPlaybackRate) || 1)
@@ -1268,7 +1296,8 @@ export default function SkeletonCanvas({
           onInputStatus?.(`Playing and analyzing video: ${inputVideoName || "uploaded sample"}`);
           return {
             started: true,
-            durationMs: durationSeconds * 1000
+            durationMs: durationSeconds * 1000,
+            completion
           };
         }
         uploadedAnalysisRef.current = {
@@ -1280,12 +1309,14 @@ export default function SkeletonCanvas({
           durationMs: durationSeconds * 1000,
           // Deterministic upload analysis advances by video timestamps, but
           // paced Practice needs the visible replay to advance in real time.
-          presentationRate: Math.min(1, Math.max(0.25, Number(uploadedPlaybackRate) || 1))
+          presentationRate: Math.min(1, Math.max(0.25, Number(uploadedPlaybackRate) || 1)),
+          resolveCompletion
         };
         onInputStatus?.(`Analyzing video deterministically: ${inputVideoName || "uploaded sample"}`);
         return {
           started: true,
-          durationMs: durationSeconds * 1000
+          durationMs: durationSeconds * 1000,
+          completion
         };
       },
       discard: async () => {
@@ -2644,7 +2675,7 @@ export default function SkeletonCanvas({
           const durationMs = upload.durationMs;
           const nextTimestampMs = videoTimestampMs + upload.sampleIntervalMs;
           if (!Number.isFinite(durationMs) || nextTimestampMs >= durationMs) {
-            upload.active = false;
+            finishUploadedAnalysis(upload, "completed");
             onInputStatus?.(`Video finished: ${inputVideoName || "uploaded sample"}`);
           } else {
             upload.seeking = true;
@@ -2702,7 +2733,7 @@ export default function SkeletonCanvas({
       videoRef.current.muted = true;
       videoRef.current.playsInline = true;
       videoRef.current.onended = () => {
-        uploadedAnalysisRef.current.active = false;
+        finishUploadedAnalysis(uploadedAnalysisRef.current, "completed");
         onInputStatus?.(`Video finished: ${inputVideoName || "uploaded sample"}`);
       };
       await waitForVideoMetadata(videoRef.current);
@@ -2768,7 +2799,7 @@ export default function SkeletonCanvas({
 
     return () => {
       isDisposed = true;
-      uploadedAnalysisRef.current.active = false;
+      finishUploadedAnalysis(uploadedAnalysisRef.current, "disposed");
       cancelAnimationFrame(animationFrameId);
       window.clearTimeout(delayedDetectionTimerId);
       cameraStream?.getTracks().forEach((track) => track.stop());

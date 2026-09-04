@@ -501,6 +501,8 @@ export default function TrainingStudio({ analysisPreview = false, studioMode = "
           onInputStatus={setAdminInputStatus}
           onPredictionStatus={setAdminPredictionStatus}
           analysisEngine={isAdminStudio ? adminAnalysisEngine : "auto"}
+          autoStartVideoAnalysis={Boolean(importedAdminVideo)}
+          initialTargetReps={importedAdminVideo?.targetReps}
         />
       ) : (
         <PracticeAnalysisMode
